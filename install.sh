@@ -144,6 +144,7 @@ remove_legacy_artifacts() {
   local old_label
   local old_plist
   local old_state
+  local child
   local shim_name
   local shim
   old_label="$(legacy_label)"
@@ -165,7 +166,17 @@ remove_legacy_artifacts() {
     fi
   done < <(legacy_shim_names)
   if [[ -d "$old_state" ]]; then
-    run rm -rf "$old_state"
+    for child in app bin; do
+      if [[ -e "$old_state/$child" ]]; then
+        backup_path "$old_state/$child"
+        run rm -rf "$old_state/$child"
+      fi
+    done
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      would "rmdir $old_state if empty"
+    else
+      rmdir "$old_state" 2>/dev/null || true
+    fi
   fi
 }
 

@@ -97,6 +97,7 @@ restore_or_remove_shim() {
 }
 
 remove_legacy_artifacts() {
+  destroy_caches="${1:-0}"
   old_label="$(legacy_label)"
   old_plist="$(legacy_plist_path)"
   old_state="$(legacy_state_dir)"
@@ -109,7 +110,14 @@ remove_legacy_artifacts() {
     fi
   done < <(legacy_shim_names)
   rm -f "$old_plist"
-  rm -rf "$old_state"
+  if [[ -d "$old_state" ]]; then
+    rm -rf "$old_state/app" "$old_state/bin"
+    if [[ "$destroy_caches" -eq 1 ]]; then
+      rm -rf "$old_state"
+    else
+      rmdir "$old_state" 2>/dev/null || true
+    fi
+  fi
 }
 
 restore_backup() {
@@ -182,7 +190,7 @@ case "$cmd" in
     if [[ "$destroy_caches" -eq 1 ]]; then
       rm -rf "$STATE_DIR/model-cache"
     fi
-    remove_legacy_artifacts
+    remove_legacy_artifacts "$destroy_caches"
     echo "agent-voice uninstalled"
     ;;
   ""|-h|--help|help)

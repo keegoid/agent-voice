@@ -156,9 +156,15 @@ def test_install_removes_prior_managed_legacy_artifacts(tmp_path: Path) -> None:
     env = {"PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}"}
     legacy_name = "codex" + "-tts"
     legacy_state = home / f".{legacy_name}"
+    legacy_app = legacy_state / "app"
+    legacy_bin = legacy_state / "bin"
+    legacy_cache = legacy_state / "model-cache" / "voice.bin"
     legacy_plist = home / "Library" / "LaunchAgents" / f"com.keegoid.{legacy_name}.plist"
-    legacy_state.mkdir(parents=True)
-    legacy_plist.parent.mkdir(parents=True)
+    legacy_app.mkdir(parents=True)
+    legacy_bin.mkdir(parents=True)
+    legacy_cache.parent.mkdir(parents=True)
+    legacy_cache.write_text("cache\n", encoding="utf-8")
+    legacy_plist.parent.mkdir(parents=True, exist_ok=True)
     legacy_plist.write_text("legacy plist\n", encoding="utf-8")
     for shim_name in (legacy_name, "codex" + "-speak", "codex" + "-voice-summary"):
         shim = home / ".local" / "bin" / shim_name
@@ -169,11 +175,69 @@ def test_install_removes_prior_managed_legacy_artifacts(tmp_path: Path) -> None:
     result = run_with_home([str(installer)], tmp_path, input_text="n\n", extra_env=env, timeout=20)
 
     assert result.returncode == 0, result.stderr
-    assert not legacy_state.exists()
+    assert not legacy_app.exists()
+    assert not legacy_bin.exists()
+    assert legacy_cache.read_text(encoding="utf-8") == "cache\n"
     assert not legacy_plist.exists()
     assert not installed_command(tmp_path, legacy_name).exists()
     assert not installed_command(tmp_path, "codex" + "-speak").exists()
     assert not installed_command(tmp_path, "codex" + "-voice-summary").exists()
+
+
+def test_uninstall_preserves_legacy_cache_without_destroy_caches(tmp_path: Path) -> None:
+    installer = require_installer()
+    home = tmp_path / "home"
+    fake_bin = tmp_path / "fake-bin"
+    make_fake_bin(fake_bin, "launchctl", "#!/bin/sh\nexit 0\n")
+    env = {"PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}"}
+
+    install = run_with_home([str(installer)], tmp_path, input_text="n\n", extra_env=env, timeout=20)
+    assert install.returncode == 0, install.stderr
+
+    legacy_name = "codex" + "-tts"
+    legacy_state = home / f".{legacy_name}"
+    legacy_app = legacy_state / "app"
+    legacy_bin = legacy_state / "bin"
+    legacy_cache = legacy_state / "model-cache" / "voice.bin"
+    legacy_plist = home / "Library" / "LaunchAgents" / f"com.keegoid.{legacy_name}.plist"
+    legacy_app.mkdir(parents=True)
+    legacy_bin.mkdir(parents=True)
+    legacy_cache.parent.mkdir(parents=True)
+    legacy_cache.write_text("cache\n", encoding="utf-8")
+    legacy_plist.parent.mkdir(parents=True, exist_ok=True)
+    legacy_plist.write_text("legacy plist\n", encoding="utf-8")
+
+    command = installed_command(tmp_path, "agent-voice")
+    uninstall = run_with_home([str(command), "uninstall"], tmp_path, extra_env=env, timeout=20)
+
+    assert uninstall.returncode == 0, uninstall.stderr
+    assert not legacy_app.exists()
+    assert not legacy_bin.exists()
+    assert legacy_cache.read_text(encoding="utf-8") == "cache\n"
+    assert not legacy_plist.exists()
+
+
+def test_uninstall_removes_legacy_cache_with_destroy_caches(tmp_path: Path) -> None:
+    installer = require_installer()
+    home = tmp_path / "home"
+    fake_bin = tmp_path / "fake-bin"
+    make_fake_bin(fake_bin, "launchctl", "#!/bin/sh\nexit 0\n")
+    env = {"PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}"}
+
+    install = run_with_home([str(installer)], tmp_path, input_text="n\n", extra_env=env, timeout=20)
+    assert install.returncode == 0, install.stderr
+
+    legacy_name = "codex" + "-tts"
+    legacy_state = home / f".{legacy_name}"
+    legacy_cache = legacy_state / "model-cache" / "voice.bin"
+    legacy_cache.parent.mkdir(parents=True)
+    legacy_cache.write_text("cache\n", encoding="utf-8")
+
+    command = installed_command(tmp_path, "agent-voice")
+    uninstall = run_with_home([str(command), "uninstall", "--destroy-caches"], tmp_path, extra_env=env, timeout=20)
+
+    assert uninstall.returncode == 0, uninstall.stderr
+    assert not legacy_state.exists()
 
 
 def test_installer_fails_when_launchd_bootstrap_fails(tmp_path: Path) -> None:
