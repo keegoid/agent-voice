@@ -215,9 +215,18 @@ def test_transcription_returns_buffered_ndjson_from_mock_model(monkeypatch: pyte
         language = "en"
 
     class FakeSttModel:
-        def generate(self, path: str, language: str | None = None, **_kwargs: Any) -> list[Any]:
+        def generate(
+            self,
+            path: str,
+            language: str | None = None,
+            initial_prompt: str | None = None,
+            **kwargs: Any,
+        ) -> list[Any]:
             assert path.endswith(".wav")
             assert language == "en"
+            assert initial_prompt == "legacy context"
+            assert "frame_threshold" not in kwargs
+            assert "prefill_step_size" not in kwargs
             return [{"text": "hello fig", "language": language}, FakeChunk()]
 
     monkeypatch.setattr(server, "get_stt_model", lambda: FakeSttModel())
@@ -225,7 +234,13 @@ def test_transcription_returns_buffered_ndjson_from_mock_model(monkeypatch: pyte
 
     response = client.post(
         "/v1/audio/transcriptions",
-        data={"model": "mlx-community/whisper-large-v3-mlx", "language": "en"},
+        data={
+            "model": "mlx-community/whisper-large-v3-mlx",
+            "language": "en",
+            "context": "legacy context",
+            "frame_threshold": "25",
+            "prefill_step_size": "2048",
+        },
         files={"file": ("sample.wav", b"RIFFfakeWAVEfmt ", "audio/wav")},
     )
 

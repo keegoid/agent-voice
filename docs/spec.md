@@ -39,9 +39,12 @@ default.
     - `model`, default `mlx-community/whisper-large-v3-mlx`. v1 supports this
       fully qualified model id only; short aliases are rejected.
     - optional `language`, `verbose`, `max_tokens`, `chunk_duration`,
-      `frame_threshold`, `context`, `prefill_step_size`, and `text`.
+      `context`, and `text`.
       These are best-effort pass-through options to the installed MLX runtime;
       unsupported options are ignored after a server-side log line.
+    - legacy `frame_threshold` and `prefill_step_size` fields are accepted for
+      old PAI/Fig callers but hidden from the schema and not forwarded to MLX
+      Whisper v1 because the current runtime rejects them.
   - rejects unsupported models with HTTP 400 before loading STT.
   - rejects uploads larger than `AGENT_VOICE_MAX_STT_UPLOAD_BYTES` before
     loading STT. The default cap is 25 MiB.
@@ -54,6 +57,8 @@ default.
     are sent.
   - loads `openai/whisper-large-v3` processor metadata when the MLX Whisper
     repository does not include a loadable processor.
+  - treats `AGENT_VOICE_STT_PROCESSOR_ID` as trust-sensitive: it controls which
+    Hugging Face processor repository is loaded for Whisper compatibility.
 
 Public voice names are:
 

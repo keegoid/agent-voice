@@ -182,8 +182,8 @@ write_shim() {
   cat >"$shim" <<EOF
 #!/usr/bin/env bash
 # agent-voice-managed-shim
-export AGENT_VOICE_HOME="$STATE_DIR"
-export CODEX_TTS_HOME="\${CODEX_TTS_HOME:-$STATE_DIR}"
+export AGENT_VOICE_HOME="\${AGENT_VOICE_HOME:-\${CODEX_TTS_HOME:-$STATE_DIR}}"
+export CODEX_TTS_HOME="\${CODEX_TTS_HOME:-\$AGENT_VOICE_HOME}"
 exec "$target" "\$@"
 EOF
   chmod 755 "$shim"

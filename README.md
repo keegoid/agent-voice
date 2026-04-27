@@ -71,6 +71,9 @@ needs transcription. `/v1/health` stays cheap and does not load either model.
 The Whisper MLX repository does not ship the processor metadata that
 `mlx-audio` expects, so the server also loads the small
 `openai/whisper-large-v3` processor on first transcription.
+`AGENT_VOICE_STT_PROCESSOR_ID` can override that processor repository for local
+experiments; treat it as trust-sensitive because it controls Hugging Face model
+loading.
 
 The launchd service sets `HF_HOME` to
 `~/.agent-voice/model-cache/huggingface`, so Hugging Face/MLX model files are
@@ -132,6 +135,8 @@ be `mlx-community/whisper-large-v3-mlx`; short aliases are rejected so callers d
 not accidentally invoke a different local model. Advanced generation knobs are
 passed through to the installed MLX runtime when supported and ignored with a
 server-side log line when that runtime does not accept them.
+Legacy PAI/Fig fields `frame_threshold` and `prefill_step_size` are accepted for
+compatibility but are not forwarded to the current MLX Whisper runtime.
 
 Public voices:
 

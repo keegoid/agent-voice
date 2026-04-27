@@ -219,7 +219,7 @@ def _filter_generation_kwargs(model: Any, gen_kwargs: dict[str, Any]) -> dict[st
         filtered = {key: value for key, value in gen_kwargs.items() if key in SAFE_STT_GENERATION_OPTIONS}
         dropped = sorted(set(gen_kwargs) - set(filtered))
         if dropped:
-            print(f"Dropping unsupported STT generation options: {', '.join(dropped)}", file=sys.stderr)
+            _log_dropped_stt_options_once(dropped)
         return filtered
     if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()):
         allowed = set(signature.parameters) | SAFE_STT_GENERATION_OPTIONS
@@ -322,9 +322,9 @@ async def audio_transcriptions(
     verbose: bool = Form(False),
     max_tokens: int = Form(1024),
     chunk_duration: float = Form(30.0),
-    frame_threshold: int = Form(25),
+    frame_threshold: int | None = Form(None, include_in_schema=False),
     context: str | None = Form(None),
-    prefill_step_size: int = Form(2048),
+    prefill_step_size: int | None = Form(None, include_in_schema=False),
     text: str | None = Form(None),
 ) -> Response:
     """Transcribe audio with the MLX Whisper model as NDJSON."""
