@@ -7,7 +7,6 @@ REPO_URL="https://github.com/keegoid/codex-tts"
 ARCHIVE_REF="${CODEX_TTS_REF:-main}"
 ARCHIVE_URL="$REPO_URL/archive/$ARCHIVE_REF.tar.gz"
 ARCHIVE_SHA256="${CODEX_TTS_ARCHIVE_SHA256:-}"
-ALLOW_UNPINNED="${CODEX_TTS_ALLOW_UNPINNED:-0}"
 STATE_DIR="${CODEX_TTS_HOME:-$HOME/.codex-tts}"
 APP_DIR="$STATE_DIR/app"
 BIN_DIR="$STATE_DIR/bin"
@@ -23,7 +22,7 @@ TEST_MODE="${CODEX_TTS_TEST_MODE:-0}"
 
 usage() {
   cat <<'USAGE'
-Usage: install.sh [--dry-run] [--source-dir PATH] [--ref REF] [--archive-sha256 SHA256] [--allow-unpinned]
+Usage: install.sh [--dry-run] [--source-dir PATH] [--ref REF] [--archive-sha256 SHA256]
 USAGE
 }
 
@@ -48,10 +47,6 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
       ARCHIVE_SHA256="$2"
       shift 2
-      ;;
-    --allow-unpinned)
-      ALLOW_UNPINNED=1
-      shift
       ;;
     -h|--help)
       usage
@@ -128,24 +123,19 @@ find_source_dir() {
 
   temp_root="$(mktemp -d)"
   archive="$temp_root/codex-tts.tar.gz"
-  if [[ -z "$ARCHIVE_SHA256" && "$ALLOW_UNPINNED" != "1" ]]; then
-    warn "Remote archive installs require --archive-sha256 unless --allow-unpinned is set."
+  if [[ -z "$ARCHIVE_SHA256" ]]; then
+    warn "Remote archive installs require --archive-sha256."
     warn "For an auditable install, clone a pinned commit and run: ./install.sh --source-dir \"\$PWD\""
     exit 1
   fi
-  if [[ -z "$ARCHIVE_SHA256" ]]; then
-    warn "Warning: installing from $ARCHIVE_REF without an archive checksum"
-  fi
   curl -fsSL "$ARCHIVE_URL" -o "$archive"
-  if [[ -n "$ARCHIVE_SHA256" ]]; then
-    actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
-    [[ "$actual" == "$ARCHIVE_SHA256" ]] || {
-      echo "Archive checksum mismatch" >&2
-      echo "expected: $ARCHIVE_SHA256" >&2
-      echo "actual:   $actual" >&2
-      exit 1
-    }
-  fi
+  actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+  [[ "$actual" == "$ARCHIVE_SHA256" ]] || {
+    echo "Archive checksum mismatch" >&2
+    echo "expected: $ARCHIVE_SHA256" >&2
+    echo "actual:   $actual" >&2
+    exit 1
+  }
   while IFS= read -r member; do
     case "$member" in
       /*|../*|*/../*|..|*/..)
@@ -154,7 +144,8 @@ find_source_dir() {
         ;;
     esac
   done < <(tar -tzf "$archive")
-  if tar -tvf "$archive" | awk '$1 ~ /^l/ { found=1 } END { exit found ? 0 : 1 }'; then
+  symlink_entries="$(tar -tvf "$archive" | awk '$1 ~ /^l/ { print }')"
+  if [[ -n "$symlink_entries" ]]; then
     echo "Archive symlinks are not supported" >&2
     exit 1
   fi
@@ -298,6 +289,10 @@ fi
 if [[ "$TEST_MODE" != "1" && "$DRY_RUN" -ne 1 ]]; then
   say "Installing Python and MLX runtime dependencies into $APP_DIR"
   uv sync --project "$APP_DIR" --extra mlx
+  [[ -x "$APP_DIR/.venv/bin/python" ]] || {
+    echo "Install failed: expected Python interpreter at $APP_DIR/.venv/bin/python" >&2
+    exit 1
+  }
 fi
 
 write_shim "codex-tts" "$BIN_DIR/codex-tts"

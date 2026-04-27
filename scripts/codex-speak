@@ -65,7 +65,10 @@ python="${CODEX_SPEAK_PYTHON:-/usr/bin/python3}"
 if [[ ! -x "$python" ]]; then
   python="$(command -v python3 2>/dev/null || true)"
 fi
-[[ -n "$python" ]] || exit 0
+if [[ -z "$python" ]]; then
+  printf "%s codex-speak skipped: python3 not found\n" "$(timestamp)" >>"$log"
+  exit 0
+fi
 
 script_path="$0"
 case "$script_path" in

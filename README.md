@@ -20,8 +20,8 @@ tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/codex
 The convenience command downloads a temporary installer first, then runs it. It
 does not use shell piping, and it targets a release tag instead of the moving
 default branch. For a stricter install, clone or download a pinned commit,
-inspect it, then run `./install.sh --source-dir "$PWD"`. Remote archive installs require
-`--archive-sha256 <sha256>` unless `--allow-unpinned` is passed explicitly.
+inspect it, then run `./install.sh --source-dir "$PWD"`. Remote archive installs
+require `--archive-sha256 <sha256>`.
 
 ## Requirements
 
@@ -44,6 +44,18 @@ inspect it, then run `./install.sh --source-dir "$PWD"`. Remote archive installs
 
 Before changing an existing file, the installer writes a timestamped backup to
 `~/.codex-tts/backups/<id>/`.
+
+## Model Download
+
+The installer does not download the Qwen3-TTS model directly. It installs the
+Python runtime and MLX dependencies, then launchd starts the local server. The
+server downloads and loads `mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16`
+the first time `/v1/audio/speech` needs generation. `/v1/health` stays cheap and
+does not load the model.
+
+The launchd service sets `HF_HOME` to
+`~/.codex-tts/model-cache/huggingface`, so Hugging Face/MLX model files are kept
+under `~/.codex-tts/model-cache`.
 
 ## Commands
 
