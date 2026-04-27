@@ -40,6 +40,8 @@ default.
       fully qualified model id only; short aliases are rejected.
     - optional `language`, `verbose`, `max_tokens`, `chunk_duration`,
       `frame_threshold`, `context`, `prefill_step_size`, and `text`.
+      These are best-effort pass-through options to the installed MLX runtime;
+      unsupported options are ignored after a server-side log line.
   - rejects unsupported models with HTTP 400 before loading STT.
   - rejects uploads larger than `CODEX_TTS_MAX_STT_UPLOAD_BYTES` before
     loading STT. The default cap is 25 MiB.

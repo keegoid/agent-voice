@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -129,7 +130,7 @@ def test_transcription_rejects_unsupported_model_without_loading(monkeypatch: py
     assert response.status_code == 400
 
 
-def test_transcription_streams_ndjson_from_mock_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_transcription_returns_buffered_ndjson_from_mock_model(monkeypatch: pytest.MonkeyPatch) -> None:
     import codex_tts.server as server
 
     class FakeChunk:
@@ -156,10 +157,12 @@ def test_transcription_streams_ndjson_from_mock_model(monkeypatch: pytest.Monkey
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/x-ndjson")
-    lines = [line for line in response.text.splitlines() if line.strip()]
+    lines = [json.loads(line) for line in response.text.splitlines() if line.strip()]
     assert len(lines) == 2
-    assert "hello fig" in lines[0]
-    assert " final" in lines[1]
+    assert lines[0]["text"] == "hello fig"
+    assert lines[0]["language"] == "en"
+    assert lines[1]["text"] == " final"
+    assert lines[1]["is_final"] is True
 
 
 def test_transcription_rejects_short_model_alias_without_loading(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -180,7 +183,7 @@ def test_transcription_rejects_short_model_alias_without_loading(monkeypatch: py
     assert response.status_code == 400
 
 
-def test_transcription_rejects_oversized_upload_without_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_transcription_rejects_upload_one_byte_over_limit_without_loading(monkeypatch: pytest.MonkeyPatch) -> None:
     import codex_tts.server as server
 
     def fail_if_loaded(*_args: Any, **_kwargs: Any) -> Any:
@@ -217,4 +220,5 @@ def test_transcription_accepts_upload_at_size_limit(monkeypatch: pytest.MonkeyPa
     )
 
     assert response.status_code == 200
-    assert "limit ok" in response.text
+    lines = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+    assert lines == [{"text": "limit ok"}]

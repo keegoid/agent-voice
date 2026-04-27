@@ -119,7 +119,11 @@ curl -fsS http://127.0.0.1:8880/v1/audio/transcriptions \
 ```
 
 The transcription response is newline-delimited JSON, buffered before it is sent.
-Version 1 does not stream partial transcription results.
+Version 1 does not stream partial transcription results. The `model` field must
+be `mlx-community/whisper-large-v3-mlx`; short aliases are rejected so callers do
+not accidentally invoke a different local model. Advanced generation knobs are
+passed through to the installed MLX runtime when supported and ignored with a
+server-side log line when that runtime does not accept them.
 
 Public voices:
 

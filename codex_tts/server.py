@@ -194,14 +194,18 @@ def _filter_generation_kwargs(model: Any, gen_kwargs: dict[str, Any]) -> dict[st
         return gen_kwargs
     if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()):
         return gen_kwargs
-    return {key: value for key, value in gen_kwargs.items() if key in signature.parameters}
+    filtered = {key: value for key, value in gen_kwargs.items() if key in signature.parameters}
+    dropped = sorted(set(gen_kwargs) - set(filtered))
+    if dropped:
+        print(f"Dropping unsupported STT generation options: {', '.join(dropped)}", file=sys.stderr)
+    return filtered
 
 
 async def _read_upload_limited(file: UploadFile, max_bytes: int) -> bytes:
     chunks: list[bytes] = []
     total = 0
     while True:
-        chunk = await file.read(min(64 * 1024, max_bytes + 1 - total))
+        chunk = await file.read(64 * 1024)
         if not chunk:
             break
         total += len(chunk)
@@ -289,8 +293,6 @@ async def audio_transcriptions(
     data = await _read_upload_limited(file, MAX_STT_UPLOAD_BYTES)
     if not data:
         raise HTTPException(status_code=400, detail="file must not be empty")
-    if len(data) > MAX_STT_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="file is too large")
 
     _, suffix = os.path.splitext(file.filename or "audio.wav")
     suffix = suffix.lower()
