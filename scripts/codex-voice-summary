@@ -4,7 +4,7 @@
 set -euo pipefail
 
 server_url="${CODEX_TTS_SERVER:-http://127.0.0.1:8880}"
-voice="${CODEX_TTS_VOICE:-peng_mythic}"
+voice="${CODEX_TTS_VOICE:-cyberpunk_cool}"
 instruct=""
 output=""
 play=1
@@ -16,7 +16,7 @@ Usage:
   echo "summary text" | codex-voice-summary [options]
 
 Options:
-  -v, --voice NAME      Voice name. Default: peng_mythic.
+  -v, --voice NAME      Voice name. Default: cyberpunk_cool.
   -i, --instruct TEXT   Custom voice-design prompt; skips server voice lookup.
   -s, --server URL      TTS server URL. Default: http://127.0.0.1:8880.
   -o, --output PATH     Save WAV to PATH instead of a temp file.

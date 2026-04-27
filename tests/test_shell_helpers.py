@@ -32,7 +32,7 @@ def test_codex_voice_summary_calls_mock_server_and_writes_output(tmp_path: Path)
                 "--server",
                 server.url,
                 "--voice",
-                "peng_mythic",
+                "cyberpunk_cool",
                 "--output",
                 str(output),
                 "--no-play",
@@ -46,7 +46,7 @@ def test_codex_voice_summary_calls_mock_server_and_writes_output(tmp_path: Path)
     assert len(server.requests) == 1
     request = server.requests[0].body
     assert request["input"] == "hello from tests"
-    assert request["voice"] == "peng_mythic"
+    assert request["voice"] == "cyberpunk_cool"
     assert request.get("model", "qwen3-tts") == "qwen3-tts"
 
 
@@ -55,7 +55,7 @@ def test_codex_voice_summary_rejects_voice_not_advertised_by_server(tmp_path: Pa
 
     with MockSpeechServer(voices=["warm_wisdom"]) as server:
         result = run_with_home(
-            [str(helper), "--server", server.url, "--voice", "peng_mythic", "--no-play", "hello"],
+            [str(helper), "--server", server.url, "--voice", "cyberpunk_cool", "--no-play", "hello"],
             tmp_path,
         )
 

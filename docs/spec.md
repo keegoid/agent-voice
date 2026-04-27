@@ -2,9 +2,9 @@
 
 ## Scope
 
-`codex-tts` is a public macOS Apple Silicon text-to-speech system for
-Codex progress cues. Version 1 targets local Apple Silicon Macs and uses
-the Qwen3-TTS voice-design model through MLX.
+`codex-tts` is a public macOS Apple Silicon speech system for Codex progress
+cues and agent voice workflows. Version 1 targets local Apple Silicon Macs and
+uses Qwen3-TTS voice design plus Whisper MLX speech-to-text through MLX.
 
 The repository must be safe to publish publicly. It must not include
 private gateway clients, tokens, generated audio, local cache data, local
@@ -17,14 +17,14 @@ The server exposes an OpenAI-compatible subset on `127.0.0.1:8880` by
 default.
 
 - `GET /v1/health`
-  - returns JSON with `status: "ok"`, the configured TTS model id, and the
-    available public voice names.
-  - must not load the model just to report health.
+  - returns JSON with `status: "ok"`, the configured TTS and STT model ids, and
+    the available public voice names.
+  - must not load either model just to report health.
 - `POST /v1/audio/speech`
   - accepts JSON fields:
     - `model`, default `qwen3-tts`
     - `input`, required non-empty text
-    - `voice`, default `peng_mythic`
+    - `voice`, default `cyberpunk_cool`
     - `response_format`, default `wav`
     - `language`, default `English`
     - `instruct`, optional custom voice-design prompt
@@ -33,6 +33,25 @@ default.
   - rejects unsupported `response_format` values with HTTP 400.
   - returns generated audio bytes with the correct audio media type.
   - returns HTTP 500 if the model generates no audio or if generation fails.
+- `POST /v1/audio/transcriptions`
+  - accepts multipart form data with:
+    - `file`, required audio upload.
+    - `model`, default `mlx-community/whisper-large-v3-mlx`. v1 supports this
+      fully qualified model id only; short aliases are rejected.
+    - optional `language`, `verbose`, `max_tokens`, `chunk_duration`,
+      `frame_threshold`, `context`, `prefill_step_size`, and `text`.
+      These are best-effort pass-through options to the installed MLX runtime;
+      unsupported options are ignored after a server-side log line.
+  - rejects unsupported models with HTTP 400 before loading STT.
+  - rejects uploads larger than `CODEX_TTS_MAX_STT_UPLOAD_BYTES` before
+    loading STT. The default cap is 25 MiB.
+  - stores uploads in temporary files using a conservative audio suffix
+    allowlist before handing them to the local MLX runtime. The service is
+    loopback-only by default; it does not treat uploaded audio as trusted.
+  - returns newline-delimited JSON transcription chunks as a buffered response.
+    v1 does not stream partial transcription results.
+  - returns HTTP 500 if STT setup or generation fails before response headers
+    are sent.
 
 Public voice names are:
 
@@ -116,7 +135,8 @@ Tests must cover:
 - shell installer backup/restore behavior.
 - shell no-argument safe helper behavior.
 - mocked server behavior for `codex-voice-summary`.
-- FastAPI health, voice validation, and speech error handling.
+- FastAPI health, voice validation, speech error handling, and transcription
+  contract behavior.
 - installer dry-run behavior proving no user files are modified without backup.
 - end-to-end local install with an existing local `server.py` disabled.
 - sensitivity checks that fail if tracked files contain private gateway names,

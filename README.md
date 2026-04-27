@@ -5,9 +5,16 @@
 [![Python](https://img.shields.io/badge/python-3.12%2B-3776AB.svg)](pyproject.toml)
 [![API](https://img.shields.io/badge/API-OpenAI%20speech%20subset-009688.svg)](#api)
 
-Local TTS for Codex progress cues on macOS Apple Silicon. It serves a small
-OpenAI-compatible speech endpoint backed by Qwen3-TTS through MLX, plus shell
-helpers that make voice cues best-effort instead of task-breaking.
+Local speech for Codex progress cues on macOS Apple Silicon. It serves small
+OpenAI-compatible speech and transcription endpoints backed by Qwen3-TTS and
+Whisper through MLX, plus shell helpers that make voice cues best-effort instead
+of task-breaking.
+
+Voice cues make agentic workflows easier to follow when your eyes are elsewhere.
+You can be on another screen, or listening from the kitchen, and still know when
+an agent starts something risky, gets blocked, or finishes a useful result. The
+voice-design prompts also add personality: because generation is probabilistic,
+the same preset can sometimes land with surprising energy, emotion, or timing.
 
 ## Install
 
@@ -33,6 +40,11 @@ require `--archive-sha256 <sha256>`.
 - Network access for the first install. The installer creates a local virtual
   environment and downloads the MLX runtime/model dependencies into app-managed
   state.
+- Disk and memory headroom. Hugging Face currently lists the Qwen3-TTS
+  VoiceDesign bf16 repository at about 4.5 GB, and the optional Whisper
+  large-v3 MLX STT model at about 3.1 GB. First use downloads model files into
+  `~/.codex-tts/model-cache`; runtime inference also needs several GB of unified
+  memory, so low-memory Macs may swap or fail under load.
 
 ## What Gets Installed
 
@@ -47,11 +59,13 @@ Before changing an existing file, the installer writes a timestamped backup to
 
 ## Model Download
 
-The installer does not download the Qwen3-TTS model directly. It installs the
-Python runtime and MLX dependencies, then launchd starts the local server. The
-server downloads and loads `mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16`
-the first time `/v1/audio/speech` needs generation. `/v1/health` stays cheap and
-does not load the model.
+The installer does not download the Qwen3-TTS or Whisper model directly. It
+installs the Python runtime and MLX dependencies, then launchd starts the local
+server. The server downloads and loads
+`mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16` the first time
+`/v1/audio/speech` needs generation, and
+`mlx-community/whisper-large-v3-mlx` the first time `/v1/audio/transcriptions`
+needs transcription. `/v1/health` stays cheap and does not load either model.
 
 The launchd service sets `HF_HOME` to
 `~/.codex-tts/model-cache/huggingface`, so Hugging Face/MLX model files are kept
@@ -91,9 +105,25 @@ Speech:
 ```bash
 curl -fsS http://127.0.0.1:8880/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3-tts","input":"Codex finished the task.","voice":"peng_mythic","response_format":"wav"}' \
+  -d '{"model":"qwen3-tts","input":"Codex finished the task.","voice":"cyberpunk_cool","response_format":"wav"}' \
   -o speech.wav
 ```
+
+Transcription:
+
+```bash
+curl -fsS http://127.0.0.1:8880/v1/audio/transcriptions \
+  -F file=@speech.wav \
+  -F model=mlx-community/whisper-large-v3-mlx \
+  -F language=en
+```
+
+The transcription response is newline-delimited JSON, buffered before it is sent.
+Version 1 does not stream partial transcription results. The `model` field must
+be `mlx-community/whisper-large-v3-mlx`; short aliases are rejected so callers do
+not accidentally invoke a different local model. Advanced generation knobs are
+passed through to the installed MLX runtime when supported and ignored with a
+server-side log line when that runtime does not accept them.
 
 Public voices:
 
