@@ -246,14 +246,17 @@ def test_uninstall_removes_legacy_cache_with_destroy_caches(tmp_path: Path) -> N
     legacy_name = "codex" + "-tts"
     legacy_state = home / f".{legacy_name}"
     legacy_cache = legacy_state / "model-cache" / "voice.bin"
+    legacy_note = legacy_state / "notes.txt"
     legacy_cache.parent.mkdir(parents=True)
     legacy_cache.write_text("cache\n", encoding="utf-8")
+    legacy_note.write_text("keep me\n", encoding="utf-8")
 
     command = installed_command(tmp_path, "agent-voice")
     uninstall = run_with_home([str(command), "uninstall", "--destroy-caches"], tmp_path, extra_env=env, timeout=20)
 
     assert uninstall.returncode == 0, uninstall.stderr
-    assert not legacy_state.exists()
+    assert not legacy_cache.exists()
+    assert legacy_note.read_text(encoding="utf-8") == "keep me\n"
 
 
 def test_installer_fails_when_launchd_bootstrap_fails(tmp_path: Path) -> None:

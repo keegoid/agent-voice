@@ -144,10 +144,9 @@ remove_legacy_artifacts() {
     backup_path "$old_state/bin"
     rm -rf "$old_state/app" "$old_state/bin"
     if [[ "$destroy_caches" -eq 1 ]]; then
-      rm -rf "$old_state"
-    else
-      rmdir "$old_state" 2>/dev/null || true
+      rm -rf "$old_state/model-cache"
     fi
+    rmdir "$old_state" 2>/dev/null || true
   fi
 }
 
