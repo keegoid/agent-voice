@@ -14,14 +14,13 @@ helpers that make voice cues best-effort instead of task-breaking.
 Version 1 supports macOS Apple Silicon only.
 
 ```bash
-tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/codex-tts/main/install.sh -o "$tmp/install.sh" && git clone --depth 1 https://github.com/keegoid/codex-tts "$tmp/source" && bash "$tmp/install.sh" --source-dir "$tmp/source"
+tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/codex-tts/v0.1.0/install.sh -o "$tmp/install.sh" && git clone --depth 1 --branch v0.1.0 https://github.com/keegoid/codex-tts "$tmp/source" && bash "$tmp/install.sh" --source-dir "$tmp/source"
 ```
 
 The convenience command downloads a temporary installer first, then runs it. It
-does not use shell piping, but it still executes code from the current GitHub
-default branch and should be treated as an unpinned convenience path. For an
-integrity-pinned install, clone or download a pinned commit/tag, inspect it,
-then run `./install.sh --source-dir "$PWD"`. Remote archive installs require
+does not use shell piping, and it targets a release tag instead of the moving
+default branch. For a stricter install, clone or download a pinned commit,
+inspect it, then run `./install.sh --source-dir "$PWD"`. Remote archive installs require
 `--archive-sha256 <sha256>` unless `--allow-unpinned` is passed explicitly.
 
 ## Requirements

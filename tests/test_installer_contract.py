@@ -106,6 +106,16 @@ def test_uninstall_restores_preexisting_command_shim(tmp_path: Path) -> None:
     assert install.returncode == 0, install.stderr
     assert "original speaker" not in original.read_text(encoding="utf-8")
 
+    reinstall = run_with_home(
+        [str(installer)],
+        tmp_path,
+        input_text="n\n",
+        extra_env={"PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}"},
+        timeout=20,
+    )
+
+    assert reinstall.returncode == 0, reinstall.stderr
+
     command = installed_command(tmp_path, "codex-tts")
     uninstall = run_with_home(
         [str(command), "uninstall"],

@@ -32,6 +32,17 @@ latest_backup() {
   find "$(backup_root)" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -n 1
 }
 
+oldest_backup_with() {
+  rel="$1"
+  while IFS= read -r backup; do
+    if [[ -f "$backup/$rel" ]]; then
+      printf '%s\n' "$backup/$rel"
+      return 0
+    fi
+  done < <(find "$(backup_root)" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+  return 1
+}
+
 restore_or_remove_shim() {
   name="$1"
   shim="$LOCAL_BIN/$name"
@@ -41,12 +52,8 @@ restore_or_remove_shim() {
     return 0
   fi
 
-  backup="$(latest_backup)"
-  saved=""
-  if [[ -n "$backup" ]]; then
-    saved="$backup/home/.local/bin/$name"
-  fi
-  if [[ -n "$saved" && -f "$saved" ]]; then
+  saved="$(oldest_backup_with "home/.local/bin/$name" || true)"
+  if [[ -n "$saved" ]]; then
     mkdir -p "$(dirname "$shim")"
     cp -a "$saved" "$shim"
     echo "Restored previous shim $shim"

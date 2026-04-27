@@ -48,7 +48,6 @@ def test_tracked_text_does_not_reference_retired_private_gateway_or_local_paths(
     forbidden_literals = [
         "OPEN" + "CLAW",
         "/" + "Users" + "/" + "kmullaney",
-        "." + "env",
     ]
     violations: list[str] = []
     for path in text_files():
@@ -58,6 +57,17 @@ def test_tracked_text_does_not_reference_retired_private_gateway_or_local_paths(
                 violations.append(f"{path.relative_to(REPO_ROOT)} contains {literal}")
 
     assert violations == []
+
+
+def test_tracked_files_do_not_include_environment_files() -> None:
+    forbidden_name = "." + "env"
+    env_files = [
+        path.relative_to(REPO_ROOT)
+        for path in tracked_files()
+        if path.name == forbidden_name or path.name.endswith(forbidden_name)
+    ]
+
+    assert env_files == []
 
 
 def test_tracked_text_does_not_contain_private_key_material() -> None:

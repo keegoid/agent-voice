@@ -4,7 +4,8 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/keegoid/codex-tts"
-ARCHIVE_URL="$REPO_URL/archive/refs/heads/main.tar.gz"
+ARCHIVE_REF="${CODEX_TTS_REF:-main}"
+ARCHIVE_URL="$REPO_URL/archive/$ARCHIVE_REF.tar.gz"
 ARCHIVE_SHA256="${CODEX_TTS_ARCHIVE_SHA256:-}"
 ALLOW_UNPINNED="${CODEX_TTS_ALLOW_UNPINNED:-0}"
 STATE_DIR="${CODEX_TTS_HOME:-$HOME/.codex-tts}"
@@ -22,7 +23,7 @@ TEST_MODE="${CODEX_TTS_TEST_MODE:-0}"
 
 usage() {
   cat <<'USAGE'
-Usage: install.sh [--dry-run] [--source-dir PATH] [--archive-sha256 SHA256] [--allow-unpinned]
+Usage: install.sh [--dry-run] [--source-dir PATH] [--ref REF] [--archive-sha256 SHA256] [--allow-unpinned]
 USAGE
 }
 
@@ -35,6 +36,12 @@ while [[ $# -gt 0 ]]; do
     --source-dir)
       [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
       SOURCE_DIR="$2"
+      shift 2
+      ;;
+    --ref)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
+      ARCHIVE_REF="$2"
+      ARCHIVE_URL="$REPO_URL/archive/$ARCHIVE_REF.tar.gz"
       shift 2
       ;;
     --archive-sha256)
@@ -127,7 +134,7 @@ find_source_dir() {
     exit 1
   fi
   if [[ -z "$ARCHIVE_SHA256" ]]; then
-    warn "Warning: installing from rolling main without an archive checksum"
+    warn "Warning: installing from $ARCHIVE_REF without an archive checksum"
   fi
   curl -fsSL "$ARCHIVE_URL" -o "$archive"
   if [[ -n "$ARCHIVE_SHA256" ]]; then
