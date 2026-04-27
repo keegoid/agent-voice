@@ -224,6 +224,45 @@ write_plist() {
 EOF
 }
 
+start_launchd_service() {
+  local domain="gui/$(id -u)"
+  local err_file
+  local attempt
+  err_file="$(mktemp "${TMPDIR:-/tmp}/codex-tts-launchctl.XXXXXX")"
+  if run launchctl print "$domain/$LABEL" >/dev/null 2>&1; then
+    if ! run launchctl bootout "$domain/$LABEL" 2>"$err_file"; then
+      warn "launchctl bootout failed for $LABEL:"
+      cat "$err_file" >&2
+      rm -f "$err_file"
+      return 1
+    fi
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      if ! run launchctl print "$domain/$LABEL" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 0.2
+    done
+    if run launchctl print "$domain/$LABEL" >/dev/null 2>&1; then
+      warn "launchctl did not unload $LABEL"
+      rm -f "$err_file"
+      return 1
+    fi
+  fi
+  for attempt in 1 2 3 4 5; do
+    : >"$err_file"
+    if run launchctl bootstrap "$domain" "$PLIST" 2>"$err_file"; then
+      rm -f "$err_file"
+      run launchctl kickstart -k "$domain/$LABEL"
+      return 0
+    fi
+    sleep 0.2
+  done
+  warn "launchctl bootstrap failed for $LABEL:"
+  cat "$err_file" >&2
+  rm -f "$err_file"
+  return 1
+}
+
 install_codex_block() {
   agents="$HOME/.codex/AGENTS.md"
   backup_path "$agents"
@@ -319,10 +358,8 @@ else
   esac
 fi
 
-if [[ "$TEST_MODE" != "1" ]]; then
-  run launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-  run launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || true
-  run launchctl kickstart -k "gui/$(id -u)/$LABEL" 2>/dev/null || true
+if [[ "$TEST_MODE" != "1" && "$DRY_RUN" -ne 1 ]]; then
+  start_launchd_service
 fi
 
 say "codex-tts installed"

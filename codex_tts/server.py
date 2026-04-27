@@ -1,31 +1,43 @@
-"""FastAPI server for the codex-tts OpenAI-compatible speech subset."""
+"""FastAPI server for the codex-tts OpenAI-compatible audio subset."""
 
 from __future__ import annotations
 
 import io
+import inspect
+import json
 import os
+import sys
+import tempfile
 import threading
 import time
+from dataclasses import asdict, is_dataclass
+from typing import Any
+
 import numpy as np
 import soundfile as sf
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from .voices import VOICE_DESIGNS
 
 TTS_MODEL_ID = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
+STT_MODEL_ID = "mlx-community/whisper-large-v3-mlx"
+MAX_STT_UPLOAD_BYTES = int(os.getenv("CODEX_TTS_MAX_STT_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+ALLOWED_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"}
 
 app = FastAPI(title="codex-tts", version="0.1.0")
 _tts_model = None
+_stt_model = None
 _tts_model_lock = threading.Lock()
+_stt_model_lock = threading.Lock()
 
 
 class RequestPayload(BaseModel):
     model: str = "qwen3-tts"
     input: str = Field(min_length=1, max_length=4000)
-    voice: str = "peng_mythic"
+    voice: str = "cyberpunk_cool"
     response_format: str = "wav"
     language: str = "English"
     instruct: str | None = Field(default=None, max_length=4000)
@@ -57,6 +69,35 @@ def _load_tts_model():
     print(f"Loading TTS model {TTS_MODEL_ID}...")
     model = mlx_load_model(TTS_MODEL_ID)
     print(f"TTS model loaded in {time.perf_counter() - started:.1f}s")
+    return model
+
+
+def get_stt_model():
+    """Load the MLX Whisper model lazily; health checks must stay cheap."""
+    global _stt_model
+    if _stt_model is None:
+        with _stt_model_lock:
+            if _stt_model is not None:
+                return _stt_model
+            _stt_model = _load_stt_model()
+    return _stt_model
+
+
+def _load_stt_model():
+    """Load the optional MLX runtime STT model."""
+    if os.getenv("CODEX_TTS_DISABLE_MODEL_LOAD") == "1":
+        raise RuntimeError("model loading disabled")
+    try:
+        from mlx_audio.stt.utils import load_model as mlx_stt_load_model
+    except Exception as exc:  # pragma: no cover - depends on optional runtime
+        raise RuntimeError(
+            "MLX audio runtime is not installed; run the installer or install the mlx extra"
+        ) from exc
+
+    started = time.perf_counter()
+    print(f"Loading STT model {STT_MODEL_ID}...")
+    model = mlx_stt_load_model(STT_MODEL_ID)
+    print(f"STT model loaded in {time.perf_counter() - started:.1f}s")
     return model
 
 
@@ -92,12 +133,91 @@ def generate_audio(
     return output.getvalue()
 
 
+def _sanitize_for_json(value: Any) -> Any:
+    """Recursively replace non-JSON numeric values in model output."""
+    if is_dataclass(value) and not isinstance(value, type):
+        value = asdict(value)
+    if isinstance(value, dict):
+        return {key: _sanitize_for_json(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_for_json(item) for item in value]
+    if isinstance(value, (float, np.floating)):
+        if np.isnan(value) or np.isinf(value):
+            return None
+        return float(value)
+    return value
+
+
+def _transcription_chunk_to_json(chunk: Any, accumulated: str) -> tuple[str, str]:
+    if isinstance(chunk, str):
+        accumulated += chunk
+        return accumulated, json.dumps({"text": chunk, "accumulated": accumulated}) + "\n"
+    if isinstance(chunk, dict):
+        return accumulated, json.dumps(_sanitize_for_json(chunk)) + "\n"
+    data = {
+        "text": getattr(chunk, "text", ""),
+        "start": getattr(chunk, "start_time", None),
+        "end": getattr(chunk, "end_time", None),
+        "is_final": getattr(chunk, "is_final", None),
+        "language": getattr(chunk, "language", None),
+    }
+    return accumulated, json.dumps(_sanitize_for_json(data)) + "\n"
+
+
+def _generate_transcription_lines(model: Any, tmp_path: str, gen_kwargs: dict[str, Any]) -> list[str]:
+    """Generate newline-delimited transcription JSON, then remove the temp file."""
+    try:
+        result = model.generate(tmp_path, **gen_kwargs)
+        if isinstance(result, str):
+            return [json.dumps({"text": result}) + "\n"]
+        if isinstance(result, dict):
+            return [json.dumps(_sanitize_for_json(result)) + "\n"]
+        if hasattr(result, "__iter__"):
+            accumulated = ""
+            lines = []
+            for chunk in result:
+                accumulated, payload = _transcription_chunk_to_json(chunk, accumulated)
+                lines.append(payload)
+            return lines
+        return [json.dumps(_sanitize_for_json(result)) + "\n"]
+    finally:
+        try:
+            os.remove(tmp_path)
+        except FileNotFoundError:
+            pass
+
+
+def _filter_generation_kwargs(model: Any, gen_kwargs: dict[str, Any]) -> dict[str, Any]:
+    try:
+        signature = inspect.signature(model.generate)
+    except (TypeError, ValueError):
+        return gen_kwargs
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()):
+        return gen_kwargs
+    return {key: value for key, value in gen_kwargs.items() if key in signature.parameters}
+
+
+async def _read_upload_limited(file: UploadFile, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(min(64 * 1024, max_bytes + 1 - total))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail="file is too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @app.get("/v1/health")
 def health() -> dict[str, object]:
     return {
         "status": "ok",
         "model": "qwen3-tts",
         "tts_model_id": TTS_MODEL_ID,
+        "stt_model_id": STT_MODEL_ID,
         "voices": list(VOICE_DESIGNS.keys()),
     }
 
@@ -147,6 +267,72 @@ def audio_speech(request: RequestPayload) -> Response:
         media_type="audio/wav",
         headers={"X-Generation-Time": f"{elapsed:.3f}"},
     )
+
+
+@app.post("/v1/audio/transcriptions")
+async def audio_transcriptions(
+    file: UploadFile = File(...),
+    model: str = Form(STT_MODEL_ID),
+    language: str | None = Form(None),
+    verbose: bool = Form(False),
+    max_tokens: int = Form(1024),
+    chunk_duration: float = Form(30.0),
+    frame_threshold: int = Form(25),
+    context: str | None = Form(None),
+    prefill_step_size: int = Form(2048),
+    text: str | None = Form(None),
+) -> Response:
+    """Transcribe audio with the MLX Whisper model as NDJSON."""
+    if model != STT_MODEL_ID:
+        raise HTTPException(status_code=400, detail="Unsupported model")
+
+    data = await _read_upload_limited(file, MAX_STT_UPLOAD_BYTES)
+    if not data:
+        raise HTTPException(status_code=400, detail="file must not be empty")
+    if len(data) > MAX_STT_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file is too large")
+
+    _, suffix = os.path.splitext(file.filename or "audio.wav")
+    suffix = suffix.lower()
+    if suffix not in ALLOWED_AUDIO_SUFFIXES:
+        suffix = ".wav"
+    with tempfile.NamedTemporaryFile(prefix="codex-tts-stt-", suffix=suffix, delete=False) as tmp:
+        tmp.write(data)
+        tmp_path = tmp.name
+
+    try:
+        stt_model = get_stt_model()
+        gen_kwargs = {
+            key: value
+            for key, value in {
+                "language": language,
+                "verbose": verbose,
+                "max_tokens": max_tokens,
+                "chunk_duration": chunk_duration,
+                "frame_threshold": frame_threshold,
+                "context": context,
+                "prefill_step_size": prefill_step_size,
+                "text": text,
+            }.items()
+            if value is not None
+        }
+        gen_kwargs = _filter_generation_kwargs(stt_model, gen_kwargs)
+        lines = _generate_transcription_lines(stt_model, tmp_path, gen_kwargs)
+    except RuntimeError as exc:
+        try:
+            os.remove(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        try:
+            os.remove(tmp_path)
+        except FileNotFoundError:
+            pass
+        print(f"Transcription failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        raise HTTPException(status_code=500, detail="Transcription failed") from exc
+
+    return Response(content="".join(lines), media_type="application/x-ndjson")
 
 
 def main() -> None:

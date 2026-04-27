@@ -146,3 +146,67 @@ def test_uninstall_does_not_restore_managed_shim_when_no_original_exists(tmp_pat
 
     assert uninstall.returncode == 0, uninstall.stderr
     assert not installed_command(tmp_path, "codex-speak").exists()
+
+
+def test_installer_fails_when_launchd_bootstrap_fails(tmp_path: Path) -> None:
+    installer = require_installer()
+    home = tmp_path / "home"
+    fake_bin = tmp_path / "fake-bin"
+    make_fake_bin(
+        fake_bin,
+        "uname",
+        """
+        #!/bin/sh
+        case "$1" in
+          -s) echo Darwin ;;
+          -m) echo arm64 ;;
+        esac
+        """,
+    )
+    make_fake_bin(
+        fake_bin,
+        "uv",
+        """
+        #!/bin/sh
+        project=""
+        while [ "$#" -gt 0 ]; do
+          if [ "$1" = "--project" ]; then
+            project="$2"
+            shift 2
+          else
+            shift
+          fi
+        done
+        mkdir -p "$project/.venv/bin"
+        printf '#!/bin/sh\n' > "$project/.venv/bin/python"
+        chmod +x "$project/.venv/bin/python"
+        """,
+    )
+    make_fake_bin(
+        fake_bin,
+        "launchctl",
+        """
+        #!/bin/sh
+        case "$1" in
+          bootout) exit 0 ;;
+          bootstrap) echo "bootstrap denied" >&2; exit 42 ;;
+          print) exit 42 ;;
+          kickstart) exit 42 ;;
+        esac
+        exit 0
+        """,
+    )
+
+    result = run_with_home(
+        [str(installer)],
+        tmp_path,
+        input_text="n\n",
+        extra_env={
+            "CODEX_TTS_TEST_MODE": "0",
+            "PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}",
+        },
+        timeout=20,
+    )
+
+    assert result.returncode != 0
+    assert "bootstrap denied" in result.stderr

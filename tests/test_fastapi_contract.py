@@ -19,11 +19,13 @@ def _json_response_field(data: dict[str, Any], *names: str) -> Any:
 
 def test_health_reports_status_model_and_public_voices_without_generation(monkeypatch: pytest.MonkeyPatch) -> None:
     app = locate_fastapi_app()
+    import codex_tts.server as server
 
     def fail_if_loaded(*_args: Any, **_kwargs: Any) -> bytes:
         raise AssertionError("health must not trigger speech generation or model loading")
 
     patch_generation(monkeypatch, app, fail_if_loaded)
+    monkeypatch.setattr(server, "get_stt_model", fail_if_loaded)
     client = TestClient(app)
 
     response = client.get("/v1/health")
@@ -32,6 +34,7 @@ def test_health_reports_status_model_and_public_voices_without_generation(monkey
     data = response.json()
     assert data["status"] == "ok"
     assert _json_response_field(data, "model", "model_id", "tts_model_id")
+    assert data["stt_model_id"]
     voices = set(_json_response_field(data, "voices", "available_voices", "public_voices"))
     assert PUBLIC_VOICES <= voices
 
@@ -52,7 +55,7 @@ def test_speech_rejects_whitespace_only_input() -> None:
 
     response = client.post(
         "/v1/audio/speech",
-        json={"input": "   ", "voice": "peng_mythic", "response_format": "wav"},
+        json={"input": "   ", "voice": "cyberpunk_cool", "response_format": "wav"},
     )
 
     assert response.status_code == 400
@@ -85,7 +88,7 @@ def test_speech_rejects_unsupported_response_format() -> None:
 
     response = client.post(
         "/v1/audio/speech",
-        json={"input": "hello", "voice": "peng_mythic", "response_format": "mp3"},
+        json={"input": "hello", "voice": "cyberpunk_cool", "response_format": "mp3"},
     )
 
     assert response.status_code == 400
@@ -102,7 +105,116 @@ def test_speech_returns_500_when_generation_produces_no_audio(monkeypatch: pytes
 
     response = client.post(
         "/v1/audio/speech",
-        json={"input": "hello", "voice": "peng_mythic", "response_format": "wav"},
+        json={"input": "hello", "voice": "cyberpunk_cool", "response_format": "wav"},
     )
 
     assert response.status_code == 500
+
+
+def test_transcription_rejects_unsupported_model_without_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    import codex_tts.server as server
+
+    def fail_if_loaded(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("unsupported model must be rejected before model loading")
+
+    monkeypatch.setattr(server, "get_stt_model", fail_if_loaded)
+    client = TestClient(locate_fastapi_app())
+
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "not-a-supported-stt-model"},
+        files={"file": ("sample.wav", b"RIFFfakeWAVEfmt ", "audio/wav")},
+    )
+
+    assert response.status_code == 400
+
+
+def test_transcription_streams_ndjson_from_mock_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    import codex_tts.server as server
+
+    class FakeChunk:
+        text = " final"
+        start_time = 0.0
+        end_time = 1.0
+        is_final = True
+        language = "en"
+
+    class FakeSttModel:
+        def generate(self, path: str, language: str | None = None, **_kwargs: Any) -> list[Any]:
+            assert path.endswith(".wav")
+            assert language == "en"
+            return [{"text": "hello fig", "language": language}, FakeChunk()]
+
+    monkeypatch.setattr(server, "get_stt_model", lambda: FakeSttModel())
+    client = TestClient(locate_fastapi_app())
+
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "mlx-community/whisper-large-v3-mlx", "language": "en"},
+        files={"file": ("sample.wav", b"RIFFfakeWAVEfmt ", "audio/wav")},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    lines = [line for line in response.text.splitlines() if line.strip()]
+    assert len(lines) == 2
+    assert "hello fig" in lines[0]
+    assert " final" in lines[1]
+
+
+def test_transcription_rejects_short_model_alias_without_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    import codex_tts.server as server
+
+    def fail_if_loaded(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("model aliases must be rejected before model loading")
+
+    monkeypatch.setattr(server, "get_stt_model", fail_if_loaded)
+    client = TestClient(locate_fastapi_app())
+
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "whisper-large-v3-mlx"},
+        files={"file": ("sample.wav", b"RIFFfakeWAVEfmt ", "audio/wav")},
+    )
+
+    assert response.status_code == 400
+
+
+def test_transcription_rejects_oversized_upload_without_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    import codex_tts.server as server
+
+    def fail_if_loaded(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("oversized upload must be rejected before model loading")
+
+    monkeypatch.setattr(server, "MAX_STT_UPLOAD_BYTES", 8)
+    monkeypatch.setattr(server, "get_stt_model", fail_if_loaded)
+    client = TestClient(locate_fastapi_app())
+
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "mlx-community/whisper-large-v3-mlx"},
+        files={"file": ("sample.wav", b"012345678", "audio/wav")},
+    )
+
+    assert response.status_code == 413
+
+
+def test_transcription_accepts_upload_at_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    import codex_tts.server as server
+
+    class FakeSttModel:
+        def generate(self, path: str, **_kwargs: Any) -> dict[str, str]:
+            return {"text": "limit ok"}
+
+    monkeypatch.setattr(server, "MAX_STT_UPLOAD_BYTES", 8)
+    monkeypatch.setattr(server, "get_stt_model", lambda: FakeSttModel())
+    client = TestClient(locate_fastapi_app())
+
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "mlx-community/whisper-large-v3-mlx"},
+        files={"file": ("sample.wav", b"01234567", "audio/wav")},
+    )
+
+    assert response.status_code == 200
+    assert "limit ok" in response.text
