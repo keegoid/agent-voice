@@ -1,0 +1,28 @@
+[project]
+name = "codex-tts"
+version = "0.1.0"
+description = "macOS Apple Silicon TTS server and Codex voice helpers"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = [
+    "fastapi>=0.135.3",
+    "numpy>=2.0.0",
+    "pydantic>=2.0.0",
+    "soundfile>=0.13.0",
+    "uvicorn>=0.44.0",
+]
+
+[project.optional-dependencies]
+mlx = [
+    "mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@main",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.0",
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
