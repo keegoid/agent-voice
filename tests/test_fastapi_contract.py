@@ -20,7 +20,7 @@ def _json_response_field(data: dict[str, Any], *names: str) -> Any:
 
 def test_health_reports_status_model_and_public_voices_without_generation(monkeypatch: pytest.MonkeyPatch) -> None:
     app = locate_fastapi_app()
-    import codex_tts.server as server
+    import agent_voice.server as server
 
     def fail_if_loaded(*_args: Any, **_kwargs: Any) -> bytes:
         raise AssertionError("health must not trigger speech generation or model loading")
@@ -36,6 +36,7 @@ def test_health_reports_status_model_and_public_voices_without_generation(monkey
     assert data["status"] == "ok"
     assert _json_response_field(data, "model", "model_id", "tts_model_id")
     assert data["stt_model_id"]
+    assert data["stt_processor_id"]
     voices = set(_json_response_field(data, "voices", "available_voices", "public_voices"))
     assert PUBLIC_VOICES <= voices
 
@@ -113,7 +114,7 @@ def test_speech_returns_500_when_generation_produces_no_audio(monkeypatch: pytes
 
 
 def test_transcription_rejects_unsupported_model_without_loading(monkeypatch: pytest.MonkeyPatch) -> None:
-    import codex_tts.server as server
+    import agent_voice.server as server
 
     def fail_if_loaded(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("unsupported model must be rejected before model loading")
@@ -130,8 +131,68 @@ def test_transcription_rejects_unsupported_model_without_loading(monkeypatch: py
     assert response.status_code == 400
 
 
+def test_stt_loader_attaches_fallback_whisper_processor(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    import types
+
+    import agent_voice.server as server
+
+    class FakeModel:
+        _processor = None
+
+    class FakeProcessor:
+        @staticmethod
+        def from_pretrained(model_id: str) -> str:
+            assert model_id == server.STT_PROCESSOR_ID
+            return "processor"
+
+    fake_mlx_audio = types.ModuleType("mlx_audio")
+    fake_stt = types.ModuleType("mlx_audio.stt")
+    fake_utils = types.ModuleType("mlx_audio.stt.utils")
+    fake_utils.load_model = lambda _model_id: FakeModel()
+    fake_stt.utils = fake_utils
+    fake_mlx_audio.stt = fake_stt
+    fake_transformers = types.ModuleType("transformers")
+    fake_transformers.WhisperProcessor = FakeProcessor
+    monkeypatch.setitem(sys.modules, "mlx_audio", fake_mlx_audio)
+    monkeypatch.setitem(sys.modules, "mlx_audio.stt", fake_stt)
+    monkeypatch.setitem(sys.modules, "mlx_audio.stt.utils", fake_utils)
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+    monkeypatch.delenv("AGENT_VOICE_DISABLE_MODEL_LOAD", raising=False)
+    monkeypatch.delenv("CODEX_TTS_DISABLE_MODEL_LOAD", raising=False)
+
+    model = server._load_stt_model()
+
+    assert model._processor == "processor"
+
+
+def test_stt_filter_drops_unsafe_decode_options_with_var_kwargs() -> None:
+    import agent_voice.server as server
+
+    class FakeWhisperLikeModel:
+        def generate(self, audio: str, *, language: str | None = None, **decode_options: Any) -> str:
+            return audio
+
+    filtered = server._filter_generation_kwargs(
+        FakeWhisperLikeModel(),
+        {
+            "language": "en",
+            "chunk_duration": 30.0,
+            "frame_threshold": 25,
+            "prefill_step_size": 2048,
+            "initial_prompt": "local context",
+        },
+    )
+
+    assert filtered == {
+        "language": "en",
+        "chunk_duration": 30.0,
+        "initial_prompt": "local context",
+    }
+
+
 def test_transcription_returns_buffered_ndjson_from_mock_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    import codex_tts.server as server
+    import agent_voice.server as server
 
     class FakeChunk:
         text = " final"
@@ -166,7 +227,7 @@ def test_transcription_returns_buffered_ndjson_from_mock_model(monkeypatch: pyte
 
 
 def test_transcription_rejects_short_model_alias_without_loading(monkeypatch: pytest.MonkeyPatch) -> None:
-    import codex_tts.server as server
+    import agent_voice.server as server
 
     def fail_if_loaded(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("model aliases must be rejected before model loading")
@@ -184,7 +245,7 @@ def test_transcription_rejects_short_model_alias_without_loading(monkeypatch: py
 
 
 def test_transcription_rejects_upload_one_byte_over_limit_without_loading(monkeypatch: pytest.MonkeyPatch) -> None:
-    import codex_tts.server as server
+    import agent_voice.server as server
 
     def fail_if_loaded(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("oversized upload must be rejected before model loading")
@@ -203,7 +264,7 @@ def test_transcription_rejects_upload_one_byte_over_limit_without_loading(monkey
 
 
 def test_transcription_accepts_upload_at_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    import codex_tts.server as server
+    import agent_voice.server as server
 
     class FakeSttModel:
         def generate(self, path: str, **_kwargs: Any) -> dict[str, str]:

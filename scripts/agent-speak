@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Best-effort voice cue. Never fail the caller if local TTS is unavailable.
+
+set +e
+
+helper="${CODEX_VOICE_HELPER:-}"
+helper="${AGENT_VOICE_HELPER:-$helper}"
+if [[ -z "$helper" ]]; then
+  helper="$(command -v agent-voice-summary 2>/dev/null || command -v codex-voice-summary 2>/dev/null || true)"
+fi
+if [[ -z "$helper" && -x "$HOME/.local/bin/agent-voice-summary" ]]; then
+  helper="$HOME/.local/bin/agent-voice-summary"
+fi
+if [[ -z "$helper" && -x "$HOME/.local/bin/codex-voice-summary" ]]; then
+  helper="$HOME/.local/bin/codex-voice-summary"
+fi
+
+state_dir="${AGENT_VOICE_HOME:-${CODEX_TTS_HOME:-}}"
+if [[ -z "$state_dir" ]]; then
+  if [[ -d "$HOME/.agent-voice" || ! -d "$HOME/.codex-tts" ]]; then
+    state_dir="$HOME/.agent-voice"
+  else
+    state_dir="$HOME/.codex-tts"
+  fi
+fi
+log="${AGENT_VOICE_SPEAK_LOG:-${CODEX_SPEAK_LOG:-$state_dir/logs/agent-speak.log}}"
+
+if [[ $# -eq 0 || -z "$helper" || ! -x "$helper" ]]; then
+  exit 0
+fi
+
+mkdir -p "$(dirname "$log")" 2>/dev/null || true
+
+timestamp() {
+  date '+%Y-%m-%dT%H:%M:%S%z'
+}
+
+run_worker() {
+  lock="${AGENT_VOICE_SPEAK_LOCK:-${TMPDIR:-/tmp}/agent-speak.lock}"
+  wait_seconds="${AGENT_VOICE_SPEAK_LOCK_WAIT_SECONDS:-${CODEX_SPEAK_LOCK_WAIT_SECONDS:-120}}"
+  deadline=$((SECONDS + wait_seconds))
+
+  while ! mkdir "$lock" 2>/dev/null; do
+    lock_pid="$(cat "$lock/pid" 2>/dev/null || true)"
+    if [[ -n "$lock_pid" ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      rm -f "$lock/pid" 2>/dev/null || true
+      rmdir "$lock" 2>/dev/null || true
+      continue
+    fi
+    if (( SECONDS >= deadline )); then
+      printf "%s agent-speak skipped: voice lock busy\n" "$(timestamp)" >>"$log"
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "$$" >"$lock/pid" 2>/dev/null || true
+  finish() {
+    rm -f "$lock/pid" 2>/dev/null || true
+    rmdir "$lock" 2>/dev/null || true
+  }
+  trap finish EXIT INT TERM HUP
+
+  printf "%s agent-speak start: %s\n" "$(timestamp)" "$*" >>"$log"
+  "$helper" "$@" </dev/null >>"$log" 2>&1
+  rc=$?
+  printf "%s agent-speak finish rc=%s\n" "$(timestamp)" "$rc" >>"$log"
+  return 0
+}
+
+if [[ "${AGENT_VOICE_SPEAK_WORKER:-0}" == "1" || "${CODEX_SPEAK_WORKER:-0}" == "1" || "${AGENT_VOICE_SPEAK_SYNC:-0}" == "1" || "${CODEX_SPEAK_SYNC:-0}" == "1" ]]; then
+  run_worker "$@"
+  exit 0
+fi
+
+python="${AGENT_VOICE_SPEAK_PYTHON:-${CODEX_SPEAK_PYTHON:-/usr/bin/python3}}"
+if [[ ! -x "$python" ]]; then
+  python="$(command -v python3 2>/dev/null || true)"
+fi
+if [[ -z "$python" ]]; then
+  printf "%s agent-speak skipped: python3 not found\n" "$(timestamp)" >>"$log"
+  exit 0
+fi
+
+script_path="$0"
+case "$script_path" in
+  */*) ;;
+  *)
+    resolved="$(command -v -- "$script_path" 2>/dev/null || true)"
+    [[ -n "$resolved" ]] || exit 0
+    script_path="$resolved"
+    ;;
+esac
+[[ -x "$script_path" ]] || exit 0
+
+"$python" - "$script_path" "$helper" "$log" "$@" >/dev/null 2>&1 <<'PY'
+import os
+import subprocess
+import sys
+
+script, helper, log, *args = sys.argv[1:]
+process_env = getattr(os, "environ").copy()
+process_env["AGENT_VOICE_SPEAK_WORKER"] = "1"
+process_env["CODEX_SPEAK_WORKER"] = "1"
+process_env["AGENT_VOICE_HELPER"] = helper
+process_env["CODEX_VOICE_HELPER"] = helper
+process_env["AGENT_VOICE_SPEAK_LOG"] = log
+process_env["CODEX_SPEAK_LOG"] = log
+
+with open(os.devnull, "rb") as stdin, open(os.devnull, "ab") as output:
+    subprocess.Popen(
+        [script, *args],
+        stdin=stdin,
+        stdout=output,
+        stderr=output,
+        env=process_env,
+        close_fds=True,
+        start_new_session=True,
+    )
+PY
+
+exit 0

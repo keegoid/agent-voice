@@ -1,11 +1,11 @@
-# codex-tts
+# agent-voice
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-black.svg)](#requirements)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3776AB.svg)](pyproject.toml)
 [![API](https://img.shields.io/badge/API-OpenAI%20speech%20subset-009688.svg)](#api)
 
-Local speech for Codex progress cues on macOS Apple Silicon. It serves small
+Local speech for agent workflows on macOS Apple Silicon. It serves small
 OpenAI-compatible speech and transcription endpoints backed by Qwen3-TTS and
 Whisper through MLX, plus shell helpers that make voice cues best-effort instead
 of task-breaking.
@@ -21,14 +21,13 @@ the same preset can sometimes land with surprising energy, emotion, or timing.
 Version 1 supports macOS Apple Silicon only.
 
 ```bash
-tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/codex-tts/v0.1.0/install.sh -o "$tmp/install.sh" && git clone --depth 1 --branch v0.1.0 https://github.com/keegoid/codex-tts "$tmp/source" && bash "$tmp/install.sh" --source-dir "$tmp/source"
+tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/agent-voice/main/install.sh -o "$tmp/install.sh" && git clone --depth 1 https://github.com/keegoid/agent-voice "$tmp/source" && bash "$tmp/install.sh" --source-dir "$tmp/source"
 ```
 
 The convenience command downloads a temporary installer first, then runs it. It
-does not use shell piping, and it targets a release tag instead of the moving
-default branch. For a stricter install, clone or download a pinned commit,
-inspect it, then run `./install.sh --source-dir "$PWD"`. Remote archive installs
-require `--archive-sha256 <sha256>`.
+does not use shell piping. For a stricter install, clone or download a pinned
+commit, inspect it, then run `./install.sh --source-dir "$PWD"`. Remote archive
+installs require `--archive-sha256 <sha256>`.
 
 ## Requirements
 
@@ -36,26 +35,28 @@ require `--archive-sha256 <sha256>`.
 - Python 3.12 or newer.
 - `uv`.
 - `git` for the convenience install command.
-- `curl`, `jq`, and `afplay` for the Codex speech helper.
+- `curl`, `jq`, and `afplay` for the shell speech helpers.
 - Network access for the first install. The installer creates a local virtual
   environment and downloads the MLX runtime/model dependencies into app-managed
   state.
 - Disk and memory headroom. Hugging Face currently lists the Qwen3-TTS
   VoiceDesign bf16 repository at about 4.5 GB, and the optional Whisper
   large-v3 MLX STT model at about 3.1 GB. First use downloads model files into
-  `~/.codex-tts/model-cache`; runtime inference also needs several GB of unified
+  `~/.agent-voice/model-cache`; runtime inference also needs several GB of unified
   memory, so low-memory Macs may swap or fail under load.
 
 ## What Gets Installed
 
-- App state: `~/.codex-tts`
-- Command shims: `~/.local/bin/codex-tts`, `codex-speak`,
-  `codex-voice-summary`
-- LaunchAgent: `com.keegoid.codex-tts`
+- App state: `~/.agent-voice` for fresh installs. Existing `~/.codex-tts`
+  installs keep using that directory to avoid duplicating model caches.
+- Command shims: `~/.local/bin/agent-voice`, `agent-speak`,
+  `agent-voice-summary`
+- Compatibility shims: `codex-tts`, `codex-speak`, `codex-voice-summary`
+- LaunchAgent: `com.keegoid.agent-voice`
 - Optional Codex config block in `~/.codex/AGENTS.md`, only after approval
 
 Before changing an existing file, the installer writes a timestamped backup to
-`~/.codex-tts/backups/<id>/`.
+`~/.agent-voice/backups/<id>/` or the existing legacy state directory.
 
 ## Model Download
 
@@ -66,29 +67,33 @@ server. The server downloads and loads
 `/v1/audio/speech` needs generation, and
 `mlx-community/whisper-large-v3-mlx` the first time `/v1/audio/transcriptions`
 needs transcription. `/v1/health` stays cheap and does not load either model.
+The Whisper MLX repository does not ship the processor metadata that
+`mlx-audio` expects, so the server also loads the small
+`openai/whisper-large-v3` processor on first transcription.
 
 The launchd service sets `HF_HOME` to
-`~/.codex-tts/model-cache/huggingface`, so Hugging Face/MLX model files are kept
-under `~/.codex-tts/model-cache`.
+`~/.agent-voice/model-cache/huggingface`, so Hugging Face/MLX model files are
+kept under `~/.agent-voice/model-cache` for fresh installs.
 
 ## Commands
 
 ```bash
-codex-tts status
-codex-tts start
-codex-tts stop
-codex-tts restart
-codex-tts logs
-codex-tts restore --list
-codex-tts restore
-codex-tts restore --backup <id>
-codex-tts uninstall
+agent-voice status
+agent-voice start
+agent-voice stop
+agent-voice restart
+agent-voice logs
+agent-voice restore --list
+agent-voice restore
+agent-voice restore --backup <id>
+agent-voice uninstall
 ```
 
-`codex-speak "message"` is intentionally safe: if the server is offline, it
+`agent-speak "message"` is intentionally safe: if the server is offline, it
 logs and exits successfully so the calling task can continue.
+`codex-speak` remains as a compatibility alias for Codex-specific workflows.
 
-Uninstall removes only shims that point at the managed `codex-tts` install. If
+Uninstall removes only shims that point at the managed `agent-voice` install. If
 an earlier shim was backed up during install, uninstall restores that previous
 file instead of deleting it.
 
@@ -105,7 +110,7 @@ Speech:
 ```bash
 curl -fsS http://127.0.0.1:8880/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3-tts","input":"Codex finished the task.","voice":"cyberpunk_cool","response_format":"wav"}' \
+  -d '{"model":"qwen3-tts","input":"The agent finished the task.","voice":"cyberpunk_cool","response_format":"wav"}' \
   -o speech.wav
 ```
 
@@ -142,7 +147,7 @@ Public voices:
 ```bash
 uv sync --group dev
 uv run pytest -q
-uv run uvicorn codex_tts.server:app --host 127.0.0.1 --port 8880
+uv run uvicorn agent_voice.server:app --host 127.0.0.1 --port 8880
 ```
 
 For real local speech generation, install the MLX extra:

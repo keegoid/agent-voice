@@ -1,9 +1,9 @@
-# codex-tts Public Behavior Spec
+# agent-voice Public Behavior Spec
 
 ## Scope
 
-`codex-tts` is a public macOS Apple Silicon speech system for Codex progress
-cues and agent voice workflows. Version 1 targets local Apple Silicon Macs and
+`agent-voice` is a public macOS Apple Silicon speech system for local agent
+voice workflows. Version 1 targets local Apple Silicon Macs and
 uses Qwen3-TTS voice design plus Whisper MLX speech-to-text through MLX.
 
 The repository must be safe to publish publicly. It must not include
@@ -18,7 +18,7 @@ default.
 
 - `GET /v1/health`
   - returns JSON with `status: "ok"`, the configured TTS and STT model ids, and
-    the available public voice names.
+    the configured STT processor id and available public voice names.
   - must not load either model just to report health.
 - `POST /v1/audio/speech`
   - accepts JSON fields:
@@ -43,7 +43,7 @@ default.
       These are best-effort pass-through options to the installed MLX runtime;
       unsupported options are ignored after a server-side log line.
   - rejects unsupported models with HTTP 400 before loading STT.
-  - rejects uploads larger than `CODEX_TTS_MAX_STT_UPLOAD_BYTES` before
+  - rejects uploads larger than `AGENT_VOICE_MAX_STT_UPLOAD_BYTES` before
     loading STT. The default cap is 25 MiB.
   - stores uploads in temporary files using a conservative audio suffix
     allowlist before handing them to the local MLX runtime. The service is
@@ -52,6 +52,8 @@ default.
     v1 does not stream partial transcription results.
   - returns HTTP 500 if STT setup or generation fails before response headers
     are sent.
+  - loads `openai/whisper-large-v3` processor metadata when the MLX Whisper
+    repository does not include a loadable processor.
 
 Public voice names are:
 
@@ -65,9 +67,9 @@ Public voice names are:
 - `warm_wisdom`
 - `sultry_commanding`
 
-## Codex Helpers
+## Agent Helpers
 
-`codex-voice-summary` is the strict helper. It:
+`agent-voice-summary` is the strict helper. It:
 
 - reads text from argv or stdin.
 - trims surrounding whitespace.
@@ -78,7 +80,7 @@ Public voice names are:
 - supports `--voice`, `--server`, `--output`, `--no-play`, and `--help`.
 - writes the output path only when `--output` is used.
 
-`codex-speak` is the safe helper. It:
+`agent-speak` is the safe helper. It:
 
 - exits successfully without speaking when called with no arguments.
 - exits successfully if its strict helper is missing or not executable.
@@ -86,33 +88,38 @@ Public voice names are:
 - logs best-effort worker activity.
 - never fails the caller because TTS is offline or unavailable.
 
+`codex-tts`, `codex-speak`, and `codex-voice-summary` remain compatibility
+aliases for Codex-specific workflows.
+
 ## Installer
 
 The installer is non-destructive.
 
-- creates app state under `~/.codex-tts`.
+- creates app state under `~/.agent-voice` for fresh installs. Existing
+  `~/.codex-tts` installs keep using that directory to avoid duplicate model
+  caches.
 - installs command shims in `~/.local/bin`.
-- creates a launchd user service with label `com.keegoid.codex-tts`.
+- creates a launchd user service with label `com.keegoid.agent-voice`.
 - asks before editing Codex config.
 - if the user agrees, backs up `~/.codex/AGENTS.md` and inserts a Codex voice
   protocol block.
 - before modifying any existing file, writes timestamped backups under
-  `~/.codex-tts/backups/<timestamp>/`.
+  `~/.agent-voice/backups/<timestamp>/` or the selected legacy state directory.
 - supports dry-run execution that reports intended changes without modifying
   user files.
 
-The installed `codex-tts` command supports:
+The installed `agent-voice` command supports:
 
-- `codex-tts status`
-- `codex-tts start`
-- `codex-tts stop`
-- `codex-tts restart`
-- `codex-tts logs`
-- `codex-tts restore`
-- `codex-tts restore --list`
-- `codex-tts restore --backup <id>`
-- `codex-tts uninstall`
-- `codex-tts uninstall --destroy-caches`
+- `agent-voice status`
+- `agent-voice start`
+- `agent-voice stop`
+- `agent-voice restart`
+- `agent-voice logs`
+- `agent-voice restore`
+- `agent-voice restore --list`
+- `agent-voice restore --backup <id>`
+- `agent-voice uninstall`
+- `agent-voice uninstall --destroy-caches`
 
 Restore behavior:
 
@@ -134,7 +141,7 @@ Tests must cover:
 
 - shell installer backup/restore behavior.
 - shell no-argument safe helper behavior.
-- mocked server behavior for `codex-voice-summary`.
+- mocked server behavior for `agent-voice-summary`.
 - FastAPI health, voice validation, speech error handling, and transcription
   contract behavior.
 - installer dry-run behavior proving no user files are modified without backup.
@@ -148,4 +155,4 @@ Before a public push:
 - run the test suite.
 - run a secret scan.
 - verify `git ls-files` contains no private or generated artifacts.
-- verify README install commands point at `keegoid/codex-tts`.
+- verify README install commands point at `keegoid/agent-voice`.
