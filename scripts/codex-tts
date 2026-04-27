@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# Manage an installed codex-tts service and backups.
+
+set -euo pipefail
+
+STATE_DIR="${CODEX_TTS_HOME:-$HOME/.codex-tts}"
+LABEL="com.keegoid.codex-tts"
+DOMAIN="gui/$(id -u)"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+LOCAL_BIN="$HOME/.local/bin"
+
+usage() {
+  cat <<'USAGE'
+Usage: codex-tts <command>
+
+Commands:
+  status
+  start
+  stop
+  restart
+  logs
+  restore [--list|--backup <id>]
+  uninstall [--destroy-caches]
+USAGE
+}
+
+backup_root() {
+  printf '%s/backups\n' "$STATE_DIR"
+}
+
+latest_backup() {
+  find "$(backup_root)" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -n 1
+}
+
+oldest_backup_with() {
+  name="$1"
+  rel="home/.local/bin/$name"
+  while IFS= read -r backup; do
+    if [[ -f "$backup/$rel" ]] && ! is_managed_shim "$backup/$rel" "$name"; then
+      printf '%s\n' "$backup/$rel"
+      return 0
+    fi
+  done < <(find "$(backup_root)" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+  return 1
+}
+
+is_managed_shim() {
+  file="$1"
+  name="$2"
+  grep -Fq "# codex-tts-managed-shim" "$file" 2>/dev/null && return 0
+  grep -Eq "exec \".*/\\.codex-tts/bin/$name\"" "$file" 2>/dev/null
+}
+
+restore_or_remove_shim() {
+  name="$1"
+  shim="$LOCAL_BIN/$name"
+  [[ -e "$shim" ]] || return 0
+  if ! is_managed_shim "$shim" "$name"; then
+    echo "Skipping unmanaged shim $shim"
+    return 0
+  fi
+
+  saved="$(oldest_backup_with "$name" || true)"
+  if [[ -n "$saved" ]]; then
+    mkdir -p "$(dirname "$shim")"
+    cp -a "$saved" "$shim"
+    echo "Restored previous shim $shim"
+  else
+    rm -f "$shim"
+    echo "Removed shim $shim"
+  fi
+}
+
+restore_backup() {
+  backup="$1"
+  [[ -d "$backup" ]] || { echo "Backup not found: $backup" >&2; exit 1; }
+  if [[ -d "$backup/home" ]]; then
+    find "$backup/home" -type f -print | while IFS= read -r saved; do
+      rel="${saved#"$backup/home/"}"
+      target="$HOME/$rel"
+      mkdir -p "$(dirname "$target")"
+      cp -a "$saved" "$target"
+    done
+  fi
+  echo "Restored backup $(basename "$backup")"
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  status)
+    launchctl print "$DOMAIN/$LABEL"
+    ;;
+  start)
+    launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || true
+    launchctl kickstart -k "$DOMAIN/$LABEL"
+    ;;
+  stop)
+    launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || launchctl bootout "$DOMAIN" "$PLIST" 2>/dev/null || true
+    ;;
+  restart)
+    "$0" stop
+    "$0" start
+    ;;
+  logs)
+    tail -n 120 -f "$STATE_DIR/logs/server.log" "$STATE_DIR/logs/server.err.log"
+    ;;
+  restore)
+    shift
+    selected=""
+    if [[ "${1:-}" == "--list" ]]; then
+      find "$(backup_root)" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | xargs -n 1 basename
+      exit 0
+    fi
+    if [[ "${1:-}" == "--backup" ]]; then
+      [[ $# -ge 2 ]] || { echo "Missing backup id" >&2; exit 2; }
+      selected="$(backup_root)/$2"
+    elif [[ $# -gt 0 ]]; then
+      echo "Unknown restore option: $1" >&2
+      exit 2
+    else
+      selected="$(latest_backup)"
+    fi
+    [[ -n "$selected" ]] || { echo "No backups available" >&2; exit 1; }
+    restore_backup "$selected"
+    ;;
+  uninstall)
+    shift
+    destroy_caches=0
+    if [[ "${1:-}" == "--destroy-caches" ]]; then
+      destroy_caches=1
+    fi
+    launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || launchctl bootout "$DOMAIN" "$PLIST" 2>/dev/null || true
+    restore_or_remove_shim "codex-tts"
+    restore_or_remove_shim "codex-speak"
+    restore_or_remove_shim "codex-voice-summary"
+    rm -f "$PLIST"
+    rm -rf "$STATE_DIR/app" "$STATE_DIR/bin"
+    if [[ "$destroy_caches" -eq 1 ]]; then
+      rm -rf "$STATE_DIR/model-cache"
+    fi
+    echo "codex-tts uninstalled"
+    ;;
+  ""|-h|--help|help)
+    usage
+    ;;
+  *)
+    echo "Unknown command: $cmd" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
