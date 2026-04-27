@@ -18,10 +18,22 @@ def test_installer_dry_run_does_not_modify_existing_user_files(tmp_path: Path) -
     home = tmp_path / "home"
     agents = home / ".codex" / "AGENTS.md"
     shim = home / ".local" / "bin" / "agent-speak"
+    legacy_name = "codex" + "-tts"
+    legacy_app = home / f".{legacy_name}" / "app"
+    legacy_bin = home / f".{legacy_name}" / "bin"
+    legacy_plist = home / "Library" / "LaunchAgents" / f"com.keegoid.{legacy_name}.plist"
+    legacy_shim = home / ".local" / "bin" / ("codex" + "-speak")
     agents.parent.mkdir(parents=True)
     shim.parent.mkdir(parents=True)
+    legacy_app.mkdir(parents=True)
+    legacy_bin.mkdir(parents=True)
+    legacy_plist.parent.mkdir(parents=True)
     agents.write_text("operator notes\n", encoding="utf-8")
     shim.write_text("#!/bin/sh\necho existing\n", encoding="utf-8")
+    (legacy_app / "server.py").write_text("legacy app\n", encoding="utf-8")
+    (legacy_bin / "runner").write_text("legacy bin\n", encoding="utf-8")
+    legacy_plist.write_text("legacy plist\n", encoding="utf-8")
+    legacy_shim.write_text(f"#!/usr/bin/env bash\n# {legacy_name}-managed-shim\n", encoding="utf-8")
     before = tree_snapshot(home)
 
     result = run_with_home([str(installer), "--dry-run"], tmp_path, input_text="y\n")
@@ -200,12 +212,15 @@ def test_uninstall_preserves_legacy_cache_without_destroy_caches(tmp_path: Path)
     legacy_bin = legacy_state / "bin"
     legacy_cache = legacy_state / "model-cache" / "voice.bin"
     legacy_plist = home / "Library" / "LaunchAgents" / f"com.keegoid.{legacy_name}.plist"
+    legacy_shim = home / ".local" / "bin" / ("codex" + "-speak")
     legacy_app.mkdir(parents=True)
     legacy_bin.mkdir(parents=True)
     legacy_cache.parent.mkdir(parents=True)
     legacy_cache.write_text("cache\n", encoding="utf-8")
     legacy_plist.parent.mkdir(parents=True, exist_ok=True)
     legacy_plist.write_text("legacy plist\n", encoding="utf-8")
+    legacy_shim.write_text(f"#!/usr/bin/env bash\n# {legacy_name}-managed-shim\n", encoding="utf-8")
+    legacy_shim.chmod(0o755)
 
     command = installed_command(tmp_path, "agent-voice")
     uninstall = run_with_home([str(command), "uninstall"], tmp_path, extra_env=env, timeout=20)
@@ -215,6 +230,7 @@ def test_uninstall_preserves_legacy_cache_without_destroy_caches(tmp_path: Path)
     assert not legacy_bin.exists()
     assert legacy_cache.read_text(encoding="utf-8") == "cache\n"
     assert not legacy_plist.exists()
+    assert not legacy_shim.exists()
 
 
 def test_uninstall_removes_legacy_cache_with_destroy_caches(tmp_path: Path) -> None:

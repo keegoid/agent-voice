@@ -134,9 +134,14 @@ legacy_shim_names() {
   printf '%s\n' "$(legacy_name)" "codex""-speak" "codex""-voice-summary"
 }
 
+legacy_shim_marker() {
+  printf '# %s-managed-shim\n' "$(legacy_name)"
+}
+
 is_managed_legacy_shim() {
   local file="$1"
-  grep -Fq "# agent-voice-managed-shim" "$file" 2>/dev/null
+  grep -Fq "# agent-voice-managed-shim" "$file" 2>/dev/null && return 0
+  grep -Fq "$(legacy_shim_marker)" "$file" 2>/dev/null
 }
 
 remove_legacy_artifacts() {

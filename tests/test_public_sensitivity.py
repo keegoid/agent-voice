@@ -31,8 +31,7 @@ AUDIO_EXTENSIONS = {".aif", ".aiff", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
 
 def tracked_files() -> list[Path]:
     result = subprocess.run(["git", "ls-files"], cwd=REPO_ROOT, text=True, capture_output=True, check=True)
-    # Deleted-but-staged paths can appear in git ls-files during local cleanup.
-    return [path for line in result.stdout.splitlines() if line and (path := REPO_ROOT / line).exists()]
+    return [REPO_ROOT / line for line in result.stdout.splitlines() if line]
 
 
 def text_files() -> list[Path]:

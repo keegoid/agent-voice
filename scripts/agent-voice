@@ -34,6 +34,10 @@ legacy_shim_names() {
   printf '%s\n' "$(legacy_name)" "codex""-speak" "codex""-voice-summary"
 }
 
+legacy_shim_marker() {
+  printf '# %s-managed-shim\n' "$(legacy_name)"
+}
+
 usage() {
   cat <<'USAGE'
 Usage: agent-voice <command>
@@ -51,6 +55,21 @@ USAGE
 
 backup_root() {
   printf '%s/backups\n' "$STATE_DIR"
+}
+
+backup_path() {
+  target="$1"
+  [[ -e "$target" ]] || return 0
+  home_prefix="$HOME/"
+  backup_id="$(date '+%Y%m%d%H%M%S')-uninstall-$$"
+  if [[ "$target" == "$home_prefix"* ]]; then
+    rel="home/${target#"$home_prefix"}"
+  else
+    rel="external/${target#/}"
+  fi
+  dest="$(backup_root)/$backup_id/$rel"
+  mkdir -p "$(dirname "$dest")"
+  cp -a "$target" "$dest"
 }
 
 latest_backup() {
@@ -74,6 +93,14 @@ is_managed_shim() {
   name="$2"
   grep -Fq "# agent-voice-managed-shim" "$file" 2>/dev/null && return 0
   grep -Eq "exec \".*/\\.agent-voice/bin/$name\"" "$file" 2>/dev/null
+}
+
+is_managed_legacy_shim() {
+  file="$1"
+  name="$2"
+  grep -Fq "# agent-voice-managed-shim" "$file" 2>/dev/null && return 0
+  grep -Fq "$(legacy_shim_marker)" "$file" 2>/dev/null && return 0
+  grep -Eq "exec \".*/\\.$(legacy_name)/bin/$name\"" "$file" 2>/dev/null
 }
 
 restore_or_remove_shim() {
@@ -104,13 +131,17 @@ remove_legacy_artifacts() {
   launchctl bootout "$DOMAIN/$old_label" 2>/dev/null || launchctl bootout "$DOMAIN" "$old_plist" 2>/dev/null || true
   while IFS= read -r shim_name; do
     shim="$LOCAL_BIN/$shim_name"
-    if [[ -e "$shim" ]] && is_managed_shim "$shim" "$shim_name"; then
+    if [[ -e "$shim" ]] && is_managed_legacy_shim "$shim" "$shim_name"; then
+      backup_path "$shim"
       rm -f "$shim"
       echo "Removed shim $shim"
     fi
   done < <(legacy_shim_names)
+  backup_path "$old_plist"
   rm -f "$old_plist"
   if [[ -d "$old_state" ]]; then
+    backup_path "$old_state/app"
+    backup_path "$old_state/bin"
     rm -rf "$old_state/app" "$old_state/bin"
     if [[ "$destroy_caches" -eq 1 ]]; then
       rm -rf "$old_state"
