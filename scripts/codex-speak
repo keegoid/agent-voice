@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Compatibility alias for agent-speak.
+# Compatibility alias for agent-speak. Keep codex-speak best-effort-safe.
 
-set -euo pipefail
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$script_dir/agent-speak" "$@"
+set +e
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+agent_speak="$script_dir/agent-speak"
+if [[ -n "$script_dir" && -x "$agent_speak" ]]; then
+  exec "$agent_speak" "$@"
+fi
+exit 0

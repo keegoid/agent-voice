@@ -13,6 +13,14 @@ def test_agent_speak_no_args_is_safe_success(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_codex_speak_alias_no_args_is_safe_success(tmp_path: Path) -> None:
+    codex_speak = require_executable("codex-speak")
+
+    result = run_with_home([str(codex_speak)], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_agent_voice_summary_rejects_empty_input(tmp_path: Path) -> None:
     helper = require_executable("agent-voice-summary")
 

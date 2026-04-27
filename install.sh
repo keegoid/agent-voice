@@ -180,6 +180,8 @@ write_shim() {
   cat >"$shim" <<EOF
 #!/usr/bin/env bash
 # agent-voice-managed-shim
+export AGENT_VOICE_HOME="$STATE_DIR"
+export CODEX_TTS_HOME="\${CODEX_TTS_HOME:-$STATE_DIR}"
 exec "$target" "\$@"
 EOF
   chmod 755 "$shim"
@@ -326,6 +328,16 @@ fi
 
 src="$(find_source_dir)"
 [[ -d "$src/agent_voice" ]] || { echo "Source directory missing agent_voice package: $src" >&2; exit 1; }
+for required in \
+  "$src/scripts/agent-voice" \
+  "$src/scripts/agent-speak" \
+  "$src/scripts/agent-voice-summary" \
+  "$src/scripts/codex-tts" \
+  "$src/scripts/codex-speak" \
+  "$src/scripts/codex-voice-summary"
+do
+  [[ -f "$required" ]] || { echo "Source directory missing required script: $required" >&2; exit 1; }
+done
 
 backup_path "$APP_DIR"
 backup_path "$BIN_DIR"
@@ -355,7 +367,6 @@ else
   chmod 755 "$BIN_DIR/agent-voice" "$BIN_DIR/agent-speak" "$BIN_DIR/agent-voice-summary"
   chmod 755 "$BIN_DIR/codex-tts" "$BIN_DIR/codex-speak" "$BIN_DIR/codex-voice-summary"
   rm -f "$STATE_DIR/server.py"
-  rm -f "$LEGACY_PLIST"
 fi
 
 if [[ "$TEST_MODE" != "1" && "$DRY_RUN" -ne 1 ]]; then
