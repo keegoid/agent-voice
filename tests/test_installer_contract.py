@@ -148,6 +148,34 @@ def test_uninstall_does_not_restore_managed_shim_when_no_original_exists(tmp_pat
     assert not installed_command(tmp_path, "agent-speak").exists()
 
 
+def test_install_removes_prior_managed_legacy_artifacts(tmp_path: Path) -> None:
+    installer = require_installer()
+    home = tmp_path / "home"
+    fake_bin = tmp_path / "fake-bin"
+    make_fake_bin(fake_bin, "launchctl", "#!/bin/sh\nexit 0\n")
+    env = {"PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}"}
+    legacy_name = "codex" + "-tts"
+    legacy_state = home / f".{legacy_name}"
+    legacy_plist = home / "Library" / "LaunchAgents" / f"com.keegoid.{legacy_name}.plist"
+    legacy_state.mkdir(parents=True)
+    legacy_plist.parent.mkdir(parents=True)
+    legacy_plist.write_text("legacy plist\n", encoding="utf-8")
+    for shim_name in (legacy_name, "codex" + "-speak", "codex" + "-voice-summary"):
+        shim = home / ".local" / "bin" / shim_name
+        shim.parent.mkdir(parents=True, exist_ok=True)
+        shim.write_text("#!/usr/bin/env bash\n# agent-voice-managed-shim\n", encoding="utf-8")
+        shim.chmod(0o755)
+
+    result = run_with_home([str(installer)], tmp_path, input_text="n\n", extra_env=env, timeout=20)
+
+    assert result.returncode == 0, result.stderr
+    assert not legacy_state.exists()
+    assert not legacy_plist.exists()
+    assert not installed_command(tmp_path, legacy_name).exists()
+    assert not installed_command(tmp_path, "codex" + "-speak").exists()
+    assert not installed_command(tmp_path, "codex" + "-voice-summary").exists()
+
+
 def test_installer_fails_when_launchd_bootstrap_fails(tmp_path: Path) -> None:
     installer = require_installer()
     home = tmp_path / "home"

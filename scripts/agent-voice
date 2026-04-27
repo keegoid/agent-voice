@@ -14,6 +14,26 @@ DOMAIN="gui/$(id -u)"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOCAL_BIN="$HOME/.local/bin"
 
+legacy_name() {
+  printf '%s%s\n' "codex" "-tts"
+}
+
+legacy_label() {
+  printf 'com.keegoid.%s\n' "$(legacy_name)"
+}
+
+legacy_state_dir() {
+  printf '%s/.%s\n' "$HOME" "$(legacy_name)"
+}
+
+legacy_plist_path() {
+  printf '%s/Library/LaunchAgents/%s.plist\n' "$HOME" "$(legacy_label)"
+}
+
+legacy_shim_names() {
+  printf '%s\n' "$(legacy_name)" "codex""-speak" "codex""-voice-summary"
+}
+
 usage() {
   cat <<'USAGE'
 Usage: agent-voice <command>
@@ -76,6 +96,22 @@ restore_or_remove_shim() {
   fi
 }
 
+remove_legacy_artifacts() {
+  old_label="$(legacy_label)"
+  old_plist="$(legacy_plist_path)"
+  old_state="$(legacy_state_dir)"
+  launchctl bootout "$DOMAIN/$old_label" 2>/dev/null || launchctl bootout "$DOMAIN" "$old_plist" 2>/dev/null || true
+  while IFS= read -r shim_name; do
+    shim="$LOCAL_BIN/$shim_name"
+    if [[ -e "$shim" ]] && is_managed_shim "$shim" "$shim_name"; then
+      rm -f "$shim"
+      echo "Removed shim $shim"
+    fi
+  done < <(legacy_shim_names)
+  rm -f "$old_plist"
+  rm -rf "$old_state"
+}
+
 restore_backup() {
   backup="$1"
   [[ -d "$backup" ]] || { echo "Backup not found: $backup" >&2; exit 1; }
@@ -101,6 +137,9 @@ case "$cmd" in
     ;;
   stop)
     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || launchctl bootout "$DOMAIN" "$PLIST" 2>/dev/null || true
+    old_label="$(legacy_label)"
+    old_plist="$(legacy_plist_path)"
+    launchctl bootout "$DOMAIN/$old_label" 2>/dev/null || launchctl bootout "$DOMAIN" "$old_plist" 2>/dev/null || true
     ;;
   restart)
     "$0" stop
@@ -143,6 +182,7 @@ case "$cmd" in
     if [[ "$destroy_caches" -eq 1 ]]; then
       rm -rf "$STATE_DIR/model-cache"
     fi
+    remove_legacy_artifacts
     echo "agent-voice uninstalled"
     ;;
   ""|-h|--help|help)

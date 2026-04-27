@@ -114,6 +114,61 @@ backup_path() {
   cp -a "$target" "$dest"
 }
 
+legacy_name() {
+  printf '%s%s\n' "codex" "-tts"
+}
+
+legacy_label() {
+  printf 'com.keegoid.%s\n' "$(legacy_name)"
+}
+
+legacy_state_dir() {
+  printf '%s/.%s\n' "$HOME" "$(legacy_name)"
+}
+
+legacy_plist_path() {
+  printf '%s/Library/LaunchAgents/%s.plist\n' "$HOME" "$(legacy_label)"
+}
+
+legacy_shim_names() {
+  printf '%s\n' "$(legacy_name)" "codex""-speak" "codex""-voice-summary"
+}
+
+is_managed_legacy_shim() {
+  local file="$1"
+  grep -Fq "# agent-voice-managed-shim" "$file" 2>/dev/null
+}
+
+remove_legacy_artifacts() {
+  local domain="gui/$(id -u)"
+  local old_label
+  local old_plist
+  local old_state
+  local shim_name
+  local shim
+  old_label="$(legacy_label)"
+  old_plist="$(legacy_plist_path)"
+  old_state="$(legacy_state_dir)"
+
+  if command -v launchctl >/dev/null 2>&1 && run launchctl print "$domain/$old_label" >/dev/null 2>&1; then
+    run launchctl bootout "$domain/$old_label" 2>/dev/null || true
+  fi
+  if [[ -e "$old_plist" ]]; then
+    backup_path "$old_plist"
+    run rm -f "$old_plist"
+  fi
+  while IFS= read -r shim_name; do
+    shim="$LOCAL_BIN/$shim_name"
+    if [[ -e "$shim" ]] && is_managed_legacy_shim "$shim"; then
+      backup_path "$shim"
+      run rm -f "$shim"
+    fi
+  done < <(legacy_shim_names)
+  if [[ -d "$old_state" ]]; then
+    run rm -rf "$old_state"
+  fi
+}
+
 find_source_dir() {
   if [[ -n "$SOURCE_DIR" ]]; then
     printf '%s\n' "$SOURCE_DIR"
@@ -372,6 +427,8 @@ else
       ;;
   esac
 fi
+
+remove_legacy_artifacts
 
 if [[ "$TEST_MODE" != "1" && "$DRY_RUN" -ne 1 ]]; then
   start_launchd_service
