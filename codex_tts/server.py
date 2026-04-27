@@ -104,6 +104,9 @@ def health() -> dict[str, object]:
 
 @app.post("/v1/audio/speech")
 def audio_speech(request: RequestPayload) -> Response:
+    if request.model not in {"qwen3-tts", TTS_MODEL_ID}:
+        raise HTTPException(status_code=400, detail="Unsupported model")
+
     if request.response_format != "wav":
         raise HTTPException(status_code=400, detail="Unsupported response_format; only wav is supported")
 
@@ -149,6 +152,8 @@ def audio_speech(request: RequestPayload) -> Response:
 def main() -> None:
     # The service has no auth layer; keep the default host loopback-only.
     host = os.getenv("CODEX_TTS_HOST", "127.0.0.1")
+    if host not in {"127.0.0.1", "localhost", "::1"} and os.getenv("CODEX_TTS_ALLOW_REMOTE") != "1":
+        raise SystemExit("Refusing non-loopback CODEX_TTS_HOST without CODEX_TTS_ALLOW_REMOTE=1")
     port = int(os.getenv("CODEX_TTS_PORT", "8880"))
     uvicorn.run("codex_tts.server:app", host=host, port=port)
 

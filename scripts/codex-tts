@@ -33,9 +33,10 @@ latest_backup() {
 }
 
 oldest_backup_with() {
-  rel="$1"
+  name="$1"
+  rel="home/.local/bin/$name"
   while IFS= read -r backup; do
-    if [[ -f "$backup/$rel" ]]; then
+    if [[ -f "$backup/$rel" ]] && ! is_managed_shim "$backup/$rel" "$name"; then
       printf '%s\n' "$backup/$rel"
       return 0
     fi
@@ -43,16 +44,23 @@ oldest_backup_with() {
   return 1
 }
 
+is_managed_shim() {
+  file="$1"
+  name="$2"
+  grep -Fq "# codex-tts-managed-shim" "$file" 2>/dev/null && return 0
+  grep -Eq "exec \".*/\\.codex-tts/bin/$name\"" "$file" 2>/dev/null
+}
+
 restore_or_remove_shim() {
   name="$1"
   shim="$LOCAL_BIN/$name"
   [[ -e "$shim" ]] || return 0
-  if ! grep -Fq "exec \"$STATE_DIR/bin/$name\"" "$shim" 2>/dev/null; then
+  if ! is_managed_shim "$shim" "$name"; then
     echo "Skipping unmanaged shim $shim"
     return 0
   fi
 
-  saved="$(oldest_backup_with "home/.local/bin/$name" || true)"
+  saved="$(oldest_backup_with "$name" || true)"
   if [[ -n "$saved" ]]; then
     mkdir -p "$(dirname "$shim")"
     cp -a "$saved" "$shim"

@@ -126,3 +126,23 @@ def test_uninstall_restores_preexisting_command_shim(tmp_path: Path) -> None:
 
     assert uninstall.returncode == 0, uninstall.stderr
     assert original.read_text(encoding="utf-8") == "#!/bin/sh\necho original speaker\n"
+
+
+def test_uninstall_does_not_restore_managed_shim_when_no_original_exists(tmp_path: Path) -> None:
+    installer = require_installer()
+    home = tmp_path / "home"
+    fake_bin = tmp_path / "fake-bin"
+    make_fake_bin(fake_bin, "launchctl", "#!/bin/sh\nexit 0\n")
+    env = {"PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}"}
+
+    first = run_with_home([str(installer)], tmp_path, input_text="n\n", extra_env=env, timeout=20)
+    assert first.returncode == 0, first.stderr
+
+    second = run_with_home([str(installer)], tmp_path, input_text="n\n", extra_env=env, timeout=20)
+    assert second.returncode == 0, second.stderr
+
+    command = installed_command(tmp_path, "codex-tts")
+    uninstall = run_with_home([str(command), "uninstall"], tmp_path, extra_env=env, timeout=20)
+
+    assert uninstall.returncode == 0, uninstall.stderr
+    assert not installed_command(tmp_path, "codex-speak").exists()

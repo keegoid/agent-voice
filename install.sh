@@ -176,6 +176,7 @@ write_shim() {
   mkdir -p "$LOCAL_BIN"
   cat >"$shim" <<EOF
 #!/usr/bin/env bash
+# codex-tts-managed-shim
 exec "$target" "\$@"
 EOF
   chmod 755 "$shim"
@@ -302,6 +303,10 @@ fi
 write_shim "codex-tts" "$BIN_DIR/codex-tts"
 write_shim "codex-speak" "$BIN_DIR/codex-speak"
 write_shim "codex-voice-summary" "$BIN_DIR/codex-voice-summary"
+case ":$PATH:" in
+  *":$LOCAL_BIN:"*) ;;
+  *) warn "Warning: $LOCAL_BIN is not on PATH; add it to your shell profile to use codex-tts commands." ;;
+esac
 write_plist
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
