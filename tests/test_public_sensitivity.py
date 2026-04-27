@@ -48,6 +48,14 @@ def test_tracked_text_does_not_reference_retired_private_gateway_or_local_paths(
     forbidden_literals = [
         "OPEN" + "CLAW",
         "/" + "Users" + "/" + "kmullaney",
+        "codex" + "-tts",
+        "codex" + "_tts",
+        "CODEX" + "_TTS",
+        "." + "codex" + "-tts",
+        "codex" + "-speak",
+        "codex" + "-voice",
+        "CODEX" + "_SPEAK",
+        "CODEX" + "_VOICE",
     ]
     violations: list[str] = []
     for path in text_files():

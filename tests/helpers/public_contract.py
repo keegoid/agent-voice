@@ -81,7 +81,6 @@ def run_with_home(
             "HOME": str(home),
             "PATH": f"{local_bin}:{env.get('PATH', '')}",
             "AGENT_VOICE_TEST_MODE": "1",
-            "CODEX_TTS_TEST_MODE": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
         }
     )
@@ -198,13 +197,9 @@ class MockSpeechServer:
 def locate_fastapi_app() -> Any:
     getattr(os, "environ").setdefault("AGENT_VOICE_TEST_MODE", "1")
     getattr(os, "environ").setdefault("AGENT_VOICE_DISABLE_MODEL_LOAD", "1")
-    getattr(os, "environ").setdefault("CODEX_TTS_TEST_MODE", "1")
-    getattr(os, "environ").setdefault("CODEX_TTS_DISABLE_MODEL_LOAD", "1")
     candidates = [
         "agent_voice.server",
         "agent_voice.app",
-        "codex_tts.server",
-        "codex_tts.app",
         "server",
         "app",
         "main",

@@ -100,25 +100,20 @@ Public voice names are:
 - logs best-effort worker activity.
 - never fails the caller because TTS is offline or unavailable.
 
-`codex-tts`, `codex-speak`, and `codex-voice-summary` remain compatibility
-aliases for Codex-specific workflows.
-`CODEX_TTS_*` environment variables remain compatibility aliases during the
-0.x upgrade path; new integrations should use `AGENT_VOICE_*`.
+Configuration uses `AGENT_VOICE_*` environment variables.
 
 ## Installer
 
 The installer is non-destructive.
 
-- creates app state under `~/.agent-voice` for fresh installs. Existing
-  `~/.codex-tts` installs keep using that directory to avoid duplicate model
-  caches.
+- creates app state under `~/.agent-voice`.
 - installs command shims in `~/.local/bin`.
 - creates a launchd user service with label `com.keegoid.agent-voice`.
 - asks before editing Codex config.
 - if the user agrees, backs up `~/.codex/AGENTS.md` and inserts a Codex voice
   protocol block.
 - before modifying any existing file, writes timestamped backups under
-  `~/.agent-voice/backups/<timestamp>/` or the selected legacy state directory.
+  `~/.agent-voice/backups/<timestamp>/`.
 - supports dry-run execution that reports intended changes without modifying
   user files.
 

@@ -13,14 +13,6 @@ def test_agent_speak_no_args_is_safe_success(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_codex_speak_alias_no_args_is_safe_success(tmp_path: Path) -> None:
-    codex_speak = require_executable("codex-speak")
-
-    result = run_with_home([str(codex_speak)], tmp_path)
-
-    assert result.returncode == 0, result.stderr
-
-
 def test_agent_voice_summary_rejects_empty_input(tmp_path: Path) -> None:
     helper = require_executable("agent-voice-summary")
 
@@ -128,26 +120,3 @@ def test_agent_voice_summary_allows_custom_instruct_without_listed_voice(tmp_pat
     request = server.requests[0].body
     assert request["voice"] == "custom_contract_voice"
     assert request["instruct"] == "Speak warmly and clearly."
-
-
-def test_codex_voice_summary_alias_still_works(tmp_path: Path) -> None:
-    helper = require_executable("codex-voice-summary")
-    output = tmp_path / "summary.wav"
-
-    with MockSpeechServer() as server:
-        result = run_with_home(
-            [
-                str(helper),
-                "--server",
-                server.url,
-                "--output",
-                str(output),
-                "--no-play",
-                "hello from alias",
-            ],
-            tmp_path,
-        )
-
-    assert result.returncode == 0, result.stderr
-    assert output.read_bytes().startswith(b"RIFF")
-    assert server.requests[0].body["input"] == "hello from alias"
