@@ -6,6 +6,7 @@ import io
 import inspect
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -25,6 +26,19 @@ from .voices import VOICE_DESIGNS
 TTS_MODEL_ID = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
 STT_MODEL_ID = "mlx-community/whisper-large-v3-mlx"
 STT_PROCESSOR_ID = os.getenv("AGENT_VOICE_STT_PROCESSOR_ID", "openai/whisper-large-v3")
+TTS_MAX_TOKENS = int(os.getenv("AGENT_VOICE_TTS_MAX_TOKENS") or os.getenv("CODEX_TTS_MAX_TOKENS") or "24000")
+TTS_GENERATION_ATTEMPTS = int(
+    os.getenv("AGENT_VOICE_TTS_GENERATION_ATTEMPTS") or os.getenv("CODEX_TTS_GENERATION_ATTEMPTS") or "2"
+)
+TTS_MAX_SEGMENT_CHARS = int(
+    os.getenv("AGENT_VOICE_TTS_MAX_SEGMENT_CHARS") or os.getenv("CODEX_TTS_MAX_SEGMENT_CHARS") or "1200"
+)
+TTS_SEGMENT_SILENCE_SECONDS = float(
+    os.getenv("AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS")
+    or os.getenv("CODEX_TTS_SEGMENT_SILENCE_SECONDS")
+    or "0.18"
+)
+TTS_REQUEST_MAX_TOKENS_LIMIT = 100000
 MAX_STT_UPLOAD_BYTES = int(
     os.getenv("AGENT_VOICE_MAX_STT_UPLOAD_BYTES")
     or os.getenv("CODEX_TTS_MAX_STT_UPLOAD_BYTES")
@@ -33,7 +47,7 @@ MAX_STT_UPLOAD_BYTES = int(
 ALLOWED_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"}
 SAFE_STT_GENERATION_OPTIONS = {"language", "verbose", "max_tokens", "chunk_duration", "initial_prompt"}
 
-app = FastAPI(title="agent-voice", version="0.2.0")
+app = FastAPI(title="agent-voice", version="0.2.1")
 _tts_model = None
 _stt_model = None
 _tts_model_lock = threading.Lock()
@@ -44,11 +58,12 @@ _logged_dropped_stt_options: set[tuple[str, ...]] = set()
 
 class RequestPayload(BaseModel):
     model: str = "qwen3-tts"
-    input: str = Field(min_length=1, max_length=4000)
+    input: str = Field(min_length=1)
     voice: str = "cyberpunk_cool"
     response_format: str = "wav"
     language: str = "English"
     instruct: str | None = Field(default=None, max_length=4000)
+    max_tokens: int | None = Field(default=None, ge=1, le=TTS_REQUEST_MAX_TOKENS_LIMIT)
 
 
 def get_tts_model():
@@ -131,31 +146,173 @@ def generate_audio(
     instruct: str,
     language: str,
     response_format: str,
+    max_tokens: int = TTS_MAX_TOKENS,
 ) -> bytes:
     """Generate audio bytes for a validated speech request."""
     model = get_tts_model()
+    segments = _split_speech_text(text, TTS_MAX_SEGMENT_CHARS)
     chunks: list[np.ndarray] = []
     sample_rate = 24000
+    output_sample_rate: int | None = None
 
-    for result in model.generate_voice_design(
-        text=text,
-        instruct=instruct,
-        language=language,
-        temperature=1.0,
-        top_p=1.0,
-        repetition_penalty=1.0,
-        max_tokens=12000,
-    ):
-        chunks.append(np.asarray(result.audio))
-        sample_rate = int(result.sample_rate)
+    for index, segment in enumerate(segments):
+        audio, sample_rate = _generate_audio_segment(
+            model=model,
+            text=segment,
+            instruct=instruct,
+            language=language,
+            max_tokens=max_tokens,
+        )
+        if audio.size == 0:
+            continue
+        if output_sample_rate is None:
+            output_sample_rate = sample_rate
+        elif sample_rate != output_sample_rate:
+            raise RuntimeError(
+                f"TTS segments returned inconsistent sample rates: {output_sample_rate} and {sample_rate}"
+            )
+        if chunks and index > 0:
+            chunks.append(np.zeros(int(sample_rate * TTS_SEGMENT_SILENCE_SECONDS), dtype=audio.dtype))
+        chunks.append(audio)
 
     if not chunks:
         return b""
 
     audio = np.concatenate(chunks)
     output = io.BytesIO()
-    sf.write(output, audio, sample_rate, format=response_format.upper())
+    sf.write(output, audio, output_sample_rate or sample_rate, format=response_format.upper())
     return output.getvalue()
+
+
+def _generate_audio_segment(
+    model: Any,
+    text: str,
+    instruct: str,
+    language: str,
+    max_tokens: int,
+) -> tuple[np.ndarray, int]:
+    attempts = max(1, TTS_GENERATION_ATTEMPTS)
+    best_audio = np.array([], dtype=np.float32)
+    best_sample_rate = 24000
+
+    for attempt in range(attempts):
+        audio, sample_rate, token_count = _generate_audio_segment_once(
+            model=model,
+            text=text,
+            instruct=instruct,
+            language=language,
+            max_tokens=max_tokens,
+            attempt=attempt,
+        )
+        if audio.size > best_audio.size:
+            best_audio = audio
+            best_sample_rate = sample_rate
+        if not _is_suspiciously_short_audio(text, audio, sample_rate):
+            return audio, sample_rate
+        if attempt < attempts - 1:
+            print(
+                "Retrying suspiciously short TTS segment "
+                f"(attempt={attempt + 1}, words={_word_count(text)}, seconds={audio.size / sample_rate:.2f}, "
+                f"tokens={token_count})",
+                file=sys.stderr,
+            )
+
+    return best_audio, best_sample_rate
+
+
+def _generate_audio_segment_once(
+    model: Any,
+    text: str,
+    instruct: str,
+    language: str,
+    max_tokens: int,
+    attempt: int,
+) -> tuple[np.ndarray, int, int]:
+    chunks: list[np.ndarray] = []
+    sample_rate = 24000
+    token_count = 0
+    temperature = 1.0 if attempt == 0 else 0.85
+    top_p = 1.0 if attempt == 0 else 0.95
+    repetition_penalty = 1.0 if attempt == 0 else 1.05
+
+    for result in model.generate_voice_design(
+        text=text,
+        instruct=instruct,
+        language=language,
+        temperature=temperature,
+        top_p=top_p,
+        repetition_penalty=repetition_penalty,
+        max_tokens=max_tokens,
+    ):
+        chunks.append(np.asarray(result.audio))
+        sample_rate = int(result.sample_rate)
+        token_count += int(getattr(result, "token_count", 0) or 0)
+
+    if not chunks:
+        return np.array([], dtype=np.float32), sample_rate, token_count
+
+    return np.concatenate(chunks), sample_rate, token_count
+
+
+def _split_speech_text(text: str, max_segment_chars: int) -> list[str]:
+    if max_segment_chars <= 0 or len(text) <= max_segment_chars:
+        return [text]
+
+    segments: list[str] = []
+    current = ""
+    for sentence in re.split(r"(?<=[.!?;:])\s+", text):
+        if not sentence:
+            continue
+        if len(sentence) > max_segment_chars:
+            if current:
+                segments.append(current)
+                current = ""
+            segments.extend(_split_long_speech_piece(sentence, max_segment_chars))
+            continue
+        candidate = f"{current} {sentence}".strip()
+        if len(candidate) > max_segment_chars and current:
+            segments.append(current)
+            current = sentence
+        else:
+            current = candidate
+    if current:
+        segments.append(current)
+    return segments or [text]
+
+
+def _split_long_speech_piece(text: str, max_segment_chars: int) -> list[str]:
+    segments: list[str] = []
+    current = ""
+    for word in text.split():
+        if len(word) > max_segment_chars:
+            if current:
+                segments.append(current)
+                current = ""
+            segments.extend(word[start : start + max_segment_chars] for start in range(0, len(word), max_segment_chars))
+            continue
+        candidate = f"{current} {word}".strip()
+        if len(candidate) > max_segment_chars and current:
+            segments.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _word_count(text: str) -> int:
+    return len(re.findall(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)?", text))
+
+
+def _is_suspiciously_short_audio(text: str, audio: np.ndarray, sample_rate: int) -> bool:
+    words = _word_count(text)
+    if words < 12 or sample_rate <= 0 or audio.size == 0:
+        return False
+    duration_seconds = audio.size / sample_rate
+    # 6.5 words/sec is intentionally permissive; only retry obvious early-EOS clips.
+    min_reasonable_seconds = max(2.0, words / 6.5)
+    return duration_seconds < min_reasonable_seconds
 
 
 def _sanitize_for_json(value: Any) -> Any:
@@ -261,6 +418,7 @@ def health() -> dict[str, object]:
         "status": "ok",
         "model": "qwen3-tts",
         "tts_model_id": TTS_MODEL_ID,
+        "tts_max_tokens": TTS_MAX_TOKENS,
         "stt_model_id": STT_MODEL_ID,
         "stt_processor_id": STT_PROCESSOR_ID,
         "voices": list(VOICE_DESIGNS.keys()),
@@ -297,6 +455,7 @@ def audio_speech(request: RequestPayload) -> Response:
             instruct=voice_design,
             language=request.language,
             response_format=request.response_format,
+            max_tokens=request.max_tokens or TTS_MAX_TOKENS,
         )
     except HTTPException:
         raise

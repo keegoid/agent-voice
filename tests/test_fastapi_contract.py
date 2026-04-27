@@ -85,6 +85,60 @@ def test_speech_accepts_custom_voice_when_instruct_is_provided(monkeypatch: pyte
     assert response.status_code != 400
 
 
+def test_speech_accepts_long_input_without_character_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = locate_fastapi_app()
+
+    def fake_generation(*_args: Any, **_kwargs: Any) -> bytes:
+        return b"RIFFfakeWAVEfmt "
+
+    patch_generation(monkeypatch, app, fake_generation)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={"input": "long agent summary. " * 500, "voice": "cyberpunk_cool", "response_format": "wav"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_generate_audio_uses_configured_tts_token_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    seen: dict[str, Any] = {}
+
+    class FakeResult:
+        audio = [0.0] * 2400
+        sample_rate = 24000
+        token_count = 100
+
+    class FakeModel:
+        def generate_voice_design(self, **kwargs: Any) -> list[FakeResult]:
+            seen.update(kwargs)
+            return [FakeResult()]
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+
+    audio = server.generate_audio(
+        text="short token budget test",
+        instruct="clear voice",
+        language="English",
+        response_format="wav",
+        max_tokens=32123,
+    )
+
+    assert audio.startswith(b"RIFF")
+    assert seen["max_tokens"] == 32123
+
+
+def test_split_speech_text_bounds_single_long_word() -> None:
+    import agent_voice.server as server
+
+    segments = server._split_speech_text("x" * 2505, 1000)
+
+    assert [len(segment) for segment in segments] == [1000, 1000, 505]
+
+
 def test_speech_rejects_unsupported_response_format() -> None:
     client = TestClient(locate_fastapi_app())
 
