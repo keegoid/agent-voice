@@ -3,29 +3,19 @@
 
 set +e
 
-helper="${CODEX_VOICE_HELPER:-}"
-helper="${AGENT_VOICE_HELPER:-$helper}"
+helper="${AGENT_VOICE_HELPER:-}"
 if [[ -z "$helper" ]]; then
-  helper="$(command -v agent-voice-summary 2>/dev/null || command -v codex-voice-summary 2>/dev/null || true)"
+  helper="$(command -v agent-voice-summary 2>/dev/null || true)"
 fi
 if [[ -z "$helper" && -x "$HOME/.local/bin/agent-voice-summary" ]]; then
   helper="$HOME/.local/bin/agent-voice-summary"
 fi
-if [[ -z "$helper" && -x "$HOME/.local/bin/codex-voice-summary" ]]; then
-  helper="$HOME/.local/bin/codex-voice-summary"
-fi
 
-state_dir="${AGENT_VOICE_HOME:-${CODEX_TTS_HOME:-}}"
+state_dir="${AGENT_VOICE_HOME:-}"
 if [[ -z "$state_dir" ]]; then
-  if [[ -d "$HOME/.codex-tts/model-cache" && ! -d "$HOME/.agent-voice/model-cache" ]]; then
-    state_dir="$HOME/.codex-tts"
-  elif [[ -d "$HOME/.agent-voice" || ! -d "$HOME/.codex-tts" ]]; then
-    state_dir="$HOME/.agent-voice"
-  else
-    state_dir="$HOME/.codex-tts"
-  fi
+  state_dir="$HOME/.agent-voice"
 fi
-log="${AGENT_VOICE_SPEAK_LOG:-${CODEX_SPEAK_LOG:-$state_dir/logs/agent-speak.log}}"
+log="${AGENT_VOICE_SPEAK_LOG:-$state_dir/logs/agent-speak.log}"
 
 if [[ $# -eq 0 || -z "$helper" || ! -x "$helper" ]]; then
   exit 0
@@ -39,7 +29,7 @@ timestamp() {
 
 run_worker() {
   lock="${AGENT_VOICE_SPEAK_LOCK:-${TMPDIR:-/tmp}/agent-speak.lock}"
-  wait_seconds="${AGENT_VOICE_SPEAK_LOCK_WAIT_SECONDS:-${CODEX_SPEAK_LOCK_WAIT_SECONDS:-120}}"
+  wait_seconds="${AGENT_VOICE_SPEAK_LOCK_WAIT_SECONDS:-120}"
   deadline=$((SECONDS + wait_seconds))
 
   while ! mkdir "$lock" 2>/dev/null; do
@@ -70,12 +60,12 @@ run_worker() {
   return 0
 }
 
-if [[ "${AGENT_VOICE_SPEAK_WORKER:-0}" == "1" || "${CODEX_SPEAK_WORKER:-0}" == "1" || "${AGENT_VOICE_SPEAK_SYNC:-0}" == "1" || "${CODEX_SPEAK_SYNC:-0}" == "1" ]]; then
+if [[ "${AGENT_VOICE_SPEAK_WORKER:-0}" == "1" || "${AGENT_VOICE_SPEAK_SYNC:-0}" == "1" ]]; then
   run_worker "$@"
   exit 0
 fi
 
-python="${AGENT_VOICE_SPEAK_PYTHON:-${CODEX_SPEAK_PYTHON:-/usr/bin/python3}}"
+python="${AGENT_VOICE_SPEAK_PYTHON:-/usr/bin/python3}"
 if [[ ! -x "$python" ]]; then
   python="$(command -v python3 2>/dev/null || true)"
 fi
@@ -103,11 +93,8 @@ import sys
 script, helper, log, *args = sys.argv[1:]
 process_env = getattr(os, "environ").copy()
 process_env["AGENT_VOICE_SPEAK_WORKER"] = "1"
-process_env["CODEX_SPEAK_WORKER"] = "1"
 process_env["AGENT_VOICE_HELPER"] = helper
-process_env["CODEX_VOICE_HELPER"] = helper
 process_env["AGENT_VOICE_SPEAK_LOG"] = log
-process_env["CODEX_SPEAK_LOG"] = log
 
 with open(os.devnull, "rb") as stdin, open(os.devnull, "ab") as output:
     subprocess.Popen(

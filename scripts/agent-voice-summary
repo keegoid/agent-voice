@@ -3,10 +3,10 @@
 
 set -euo pipefail
 
-server_url="${AGENT_VOICE_SERVER:-${CODEX_TTS_SERVER:-http://127.0.0.1:8880}}"
-voice="${AGENT_VOICE_VOICE:-${CODEX_TTS_VOICE:-cyberpunk_cool}}"
-speech_timeout="${AGENT_VOICE_SPEECH_TIMEOUT_SECONDS:-${CODEX_TTS_SPEECH_TIMEOUT_SECONDS:-600}}"
-max_tokens="${AGENT_VOICE_TTS_MAX_TOKENS:-${CODEX_TTS_MAX_TOKENS:-}}"
+server_url="${AGENT_VOICE_SERVER:-http://127.0.0.1:8880}"
+voice="${AGENT_VOICE_VOICE:-cyberpunk_cool}"
+speech_timeout="${AGENT_VOICE_SPEECH_TIMEOUT_SECONDS:-600}"
+max_tokens="${AGENT_VOICE_TTS_MAX_TOKENS:-}"
 instruct=""
 output=""
 play=1

@@ -26,24 +26,12 @@ from .voices import VOICE_DESIGNS
 TTS_MODEL_ID = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
 STT_MODEL_ID = "mlx-community/whisper-large-v3-mlx"
 STT_PROCESSOR_ID = os.getenv("AGENT_VOICE_STT_PROCESSOR_ID", "openai/whisper-large-v3")
-TTS_MAX_TOKENS = int(os.getenv("AGENT_VOICE_TTS_MAX_TOKENS") or os.getenv("CODEX_TTS_MAX_TOKENS") or "24000")
-TTS_GENERATION_ATTEMPTS = int(
-    os.getenv("AGENT_VOICE_TTS_GENERATION_ATTEMPTS") or os.getenv("CODEX_TTS_GENERATION_ATTEMPTS") or "2"
-)
-TTS_MAX_SEGMENT_CHARS = int(
-    os.getenv("AGENT_VOICE_TTS_MAX_SEGMENT_CHARS") or os.getenv("CODEX_TTS_MAX_SEGMENT_CHARS") or "1200"
-)
-TTS_SEGMENT_SILENCE_SECONDS = float(
-    os.getenv("AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS")
-    or os.getenv("CODEX_TTS_SEGMENT_SILENCE_SECONDS")
-    or "0.18"
-)
+TTS_MAX_TOKENS = int(os.getenv("AGENT_VOICE_TTS_MAX_TOKENS") or "24000")
+TTS_GENERATION_ATTEMPTS = int(os.getenv("AGENT_VOICE_TTS_GENERATION_ATTEMPTS") or "2")
+TTS_MAX_SEGMENT_CHARS = int(os.getenv("AGENT_VOICE_TTS_MAX_SEGMENT_CHARS") or "1200")
+TTS_SEGMENT_SILENCE_SECONDS = float(os.getenv("AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS") or "0.18")
 TTS_REQUEST_MAX_TOKENS_LIMIT = 100000
-MAX_STT_UPLOAD_BYTES = int(
-    os.getenv("AGENT_VOICE_MAX_STT_UPLOAD_BYTES")
-    or os.getenv("CODEX_TTS_MAX_STT_UPLOAD_BYTES")
-    or str(25 * 1024 * 1024)
-)
+MAX_STT_UPLOAD_BYTES = int(os.getenv("AGENT_VOICE_MAX_STT_UPLOAD_BYTES") or str(25 * 1024 * 1024))
 ALLOWED_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"}
 SAFE_STT_GENERATION_OPTIONS = {"language", "verbose", "max_tokens", "chunk_duration", "initial_prompt"}
 
@@ -79,7 +67,7 @@ def get_tts_model():
 
 def _load_tts_model():
     """Load the optional MLX runtime model."""
-    if os.getenv("AGENT_VOICE_DISABLE_MODEL_LOAD") == "1" or os.getenv("CODEX_TTS_DISABLE_MODEL_LOAD") == "1":
+    if os.getenv("AGENT_VOICE_DISABLE_MODEL_LOAD") == "1":
         raise RuntimeError("model loading disabled")
     try:
         from mlx_audio.tts.utils import load_model as mlx_load_model
@@ -108,7 +96,7 @@ def get_stt_model():
 
 def _load_stt_model():
     """Load the optional MLX runtime STT model."""
-    if os.getenv("AGENT_VOICE_DISABLE_MODEL_LOAD") == "1" or os.getenv("CODEX_TTS_DISABLE_MODEL_LOAD") == "1":
+    if os.getenv("AGENT_VOICE_DISABLE_MODEL_LOAD") == "1":
         raise RuntimeError("model loading disabled")
     try:
         from mlx_audio.stt.utils import load_model as mlx_stt_load_model
@@ -543,15 +531,12 @@ def main() -> None:
     host, allow_remote = _server_bind_config()
     if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
         raise SystemExit("Refusing non-loopback AGENT_VOICE_HOST without AGENT_VOICE_ALLOW_REMOTE=1")
-    port = int(os.getenv("AGENT_VOICE_PORT") or os.getenv("CODEX_TTS_PORT") or "8880")
+    port = int(os.getenv("AGENT_VOICE_PORT") or "8880")
     uvicorn.run("agent_voice.server:app", host=host, port=port)
 
 
 def _server_bind_config() -> tuple[str, bool]:
-    agent_host = os.getenv("AGENT_VOICE_HOST")
-    if agent_host:
-        return agent_host, os.getenv("AGENT_VOICE_ALLOW_REMOTE") == "1"
-    return os.getenv("CODEX_TTS_HOST") or "127.0.0.1", os.getenv("CODEX_TTS_ALLOW_REMOTE") == "1"
+    return os.getenv("AGENT_VOICE_HOST") or "127.0.0.1", os.getenv("AGENT_VOICE_ALLOW_REMOTE") == "1"
 
 
 if __name__ == "__main__":

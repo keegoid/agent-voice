@@ -3,32 +3,20 @@
 
 set -euo pipefail
 
-LEGACY_STATE_DIR="$HOME/.codex-tts"
 DEFAULT_STATE_DIR="$HOME/.agent-voice"
 if [[ -n "${AGENT_VOICE_HOME:-}" ]]; then
   STATE_DIR="$AGENT_VOICE_HOME"
-elif [[ -n "${CODEX_TTS_HOME:-}" ]]; then
-  STATE_DIR="$CODEX_TTS_HOME"
-elif [[ -d "$LEGACY_STATE_DIR/model-cache" && ! -d "$DEFAULT_STATE_DIR/model-cache" ]]; then
-  STATE_DIR="$LEGACY_STATE_DIR"
-elif [[ -d "$LEGACY_STATE_DIR" && ! -d "$DEFAULT_STATE_DIR" ]]; then
-  STATE_DIR="$LEGACY_STATE_DIR"
 else
   STATE_DIR="$DEFAULT_STATE_DIR"
 fi
 LABEL="com.keegoid.agent-voice"
-LEGACY_LABEL="com.keegoid.codex-tts"
 DOMAIN="gui/$(id -u)"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LEGACY_PLIST="$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist"
 LOCAL_BIN="$HOME/.local/bin"
 
 usage() {
   cat <<'USAGE'
 Usage: agent-voice <command>
-
-Legacy aliases `codex-tts`, `codex-speak`, and `codex-voice-summary` are kept
-for existing Codex workflows.
 
 Commands:
   status
@@ -65,8 +53,7 @@ is_managed_shim() {
   file="$1"
   name="$2"
   grep -Fq "# agent-voice-managed-shim" "$file" 2>/dev/null && return 0
-  grep -Fq "# codex-tts-managed-shim" "$file" 2>/dev/null && return 0
-  grep -Eq "exec \".*/\\.(agent-voice|codex-tts)/bin/$name\"" "$file" 2>/dev/null
+  grep -Eq "exec \".*/\\.agent-voice/bin/$name\"" "$file" 2>/dev/null
 }
 
 restore_or_remove_shim() {
@@ -106,7 +93,7 @@ restore_backup() {
 cmd="${1:-}"
 case "$cmd" in
   status)
-    launchctl print "$DOMAIN/$LABEL" 2>/dev/null || launchctl print "$DOMAIN/$LEGACY_LABEL"
+    launchctl print "$DOMAIN/$LABEL"
     ;;
   start)
     launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || true
@@ -114,7 +101,6 @@ case "$cmd" in
     ;;
   stop)
     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || launchctl bootout "$DOMAIN" "$PLIST" 2>/dev/null || true
-    launchctl bootout "$DOMAIN/$LEGACY_LABEL" 2>/dev/null || launchctl bootout "$DOMAIN" "$LEGACY_PLIST" 2>/dev/null || true
     ;;
   restart)
     "$0" stop
@@ -149,24 +135,13 @@ case "$cmd" in
       destroy_caches=1
     fi
     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || launchctl bootout "$DOMAIN" "$PLIST" 2>/dev/null || true
-    launchctl bootout "$DOMAIN/$LEGACY_LABEL" 2>/dev/null || launchctl bootout "$DOMAIN" "$LEGACY_PLIST" 2>/dev/null || true
     restore_or_remove_shim "agent-voice"
     restore_or_remove_shim "agent-speak"
     restore_or_remove_shim "agent-voice-summary"
-    restore_or_remove_shim "codex-tts"
-    restore_or_remove_shim "codex-speak"
-    restore_or_remove_shim "codex-voice-summary"
     rm -f "$PLIST"
-    rm -f "$LEGACY_PLIST"
     rm -rf "$STATE_DIR/app" "$STATE_DIR/bin"
-    if [[ "$STATE_DIR" != "$LEGACY_STATE_DIR" ]]; then
-      rm -rf "$LEGACY_STATE_DIR/app" "$LEGACY_STATE_DIR/bin"
-    fi
     if [[ "$destroy_caches" -eq 1 ]]; then
       rm -rf "$STATE_DIR/model-cache"
-      if [[ "$STATE_DIR" != "$LEGACY_STATE_DIR" ]]; then
-        rm -rf "$LEGACY_STATE_DIR/model-cache"
-      fi
     fi
     echo "agent-voice uninstalled"
     ;;

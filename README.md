@@ -21,13 +21,14 @@ the same preset can sometimes land with surprising energy, emotion, or timing.
 Version 1 supports macOS Apple Silicon only.
 
 ```bash
-tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/agent-voice/v0.2.1/install.sh -o "$tmp/install.sh" && git clone --depth 1 --branch v0.2.1 https://github.com/keegoid/agent-voice "$tmp/source" && bash "$tmp/install.sh" --source-dir "$tmp/source"
+tmp="$(mktemp -d)"
+git clone --depth 1 --branch v0.2.1 https://github.com/keegoid/agent-voice "$tmp/agent-voice"
+"$tmp/agent-voice/install.sh"
 ```
 
-The convenience command downloads a temporary installer first, then runs it. It
-does not use shell piping, and it targets a release tag instead of the moving
-default branch. For a stricter install, clone or download a pinned commit,
-inspect it, then run `./install.sh --source-dir "$PWD"`. Remote archive installs
+The convenience command does not use shell piping, and it targets a release tag
+instead of the moving default branch. For a stricter install, clone or download a
+pinned commit, inspect it, then run `./install.sh`. Remote archive installs
 require `--archive-sha256 <sha256>`.
 
 ## Requirements
@@ -48,16 +49,14 @@ require `--archive-sha256 <sha256>`.
 
 ## What Gets Installed
 
-- App state: `~/.agent-voice` for fresh installs. Existing `~/.codex-tts`
-  installs keep using that directory to avoid duplicating model caches.
+- App state: `~/.agent-voice`
 - Command shims: `~/.local/bin/agent-voice`, `agent-speak`,
   `agent-voice-summary`
-- Compatibility shims: `codex-tts`, `codex-speak`, `codex-voice-summary`
 - LaunchAgent: `com.keegoid.agent-voice`
 - Optional Codex config block in `~/.codex/AGENTS.md`, only after approval
 
 Before changing an existing file, the installer writes a timestamped backup to
-`~/.agent-voice/backups/<id>/` or the existing legacy state directory.
+`~/.agent-voice/backups/<id>/`.
 
 ## Model Download
 
@@ -102,9 +101,7 @@ agent-voice uninstall
 
 `agent-speak "message"` is intentionally safe: if the server is offline, it
 logs and exits successfully so the calling task can continue.
-`codex-speak` remains as a compatibility alias for Codex-specific workflows.
-Prefer `AGENT_VOICE_*` environment variables for new integrations; `CODEX_TTS_*`
-aliases are retained for the 0.x compatibility window.
+Use `AGENT_VOICE_*` environment variables for configuration.
 
 Uninstall removes only shims that point at the managed `agent-voice` install. If
 an earlier shim was backed up during install, uninstall restores that previous

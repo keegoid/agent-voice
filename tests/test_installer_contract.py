@@ -146,7 +146,6 @@ def test_uninstall_does_not_restore_managed_shim_when_no_original_exists(tmp_pat
 
     assert uninstall.returncode == 0, uninstall.stderr
     assert not installed_command(tmp_path, "agent-speak").exists()
-    assert not installed_command(tmp_path, "codex-speak").exists()
 
 
 def test_installer_fails_when_launchd_bootstrap_fails(tmp_path: Path) -> None:
@@ -204,7 +203,6 @@ def test_installer_fails_when_launchd_bootstrap_fails(tmp_path: Path) -> None:
         input_text="n\n",
         extra_env={
             "AGENT_VOICE_TEST_MODE": "0",
-            "CODEX_TTS_TEST_MODE": "0",
             "PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}",
         },
         timeout=20,

@@ -31,7 +31,7 @@ AUDIO_EXTENSIONS = {".aif", ".aiff", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
 
 def tracked_files() -> list[Path]:
     result = subprocess.run(["git", "ls-files"], cwd=REPO_ROOT, text=True, capture_output=True, check=True)
-    return [REPO_ROOT / line for line in result.stdout.splitlines() if line]
+    return [path for line in result.stdout.splitlines() if line and (path := REPO_ROOT / line).exists()]
 
 
 def text_files() -> list[Path]:
@@ -48,6 +48,14 @@ def test_tracked_text_does_not_reference_retired_private_gateway_or_local_paths(
     forbidden_literals = [
         "OPEN" + "CLAW",
         "/" + "Users" + "/" + "kmullaney",
+        "codex" + "-tts",
+        "codex" + "_tts",
+        "CODEX" + "_TTS",
+        "." + "codex" + "-tts",
+        "codex" + "-speak",
+        "codex" + "-voice",
+        "CODEX" + "_SPEAK",
+        "CODEX" + "_VOICE",
     ]
     violations: list[str] = []
     for path in text_files():

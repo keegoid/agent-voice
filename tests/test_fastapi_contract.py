@@ -213,7 +213,6 @@ def test_stt_loader_attaches_fallback_whisper_processor(monkeypatch: pytest.Monk
     monkeypatch.setitem(sys.modules, "mlx_audio.stt.utils", fake_utils)
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
     monkeypatch.delenv("AGENT_VOICE_DISABLE_MODEL_LOAD", raising=False)
-    monkeypatch.delenv("CODEX_TTS_DISABLE_MODEL_LOAD", raising=False)
 
     model = server._load_stt_model()
 
@@ -250,7 +249,6 @@ def test_agent_voice_allow_remote_must_match_agent_voice_host(monkeypatch: pytes
 
     monkeypatch.setenv("AGENT_VOICE_HOST", "0.0.0.0")
     monkeypatch.delenv("AGENT_VOICE_ALLOW_REMOTE", raising=False)
-    monkeypatch.setenv("CODEX_TTS_ALLOW_REMOTE", "1")
 
     host, allow_remote = server._server_bind_config()
 
