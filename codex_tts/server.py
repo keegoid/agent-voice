@@ -96,6 +96,10 @@ def audio_speech(request: RequestPayload) -> Response:
     if request.response_format != "wav":
         raise HTTPException(status_code=400, detail="Unsupported response_format; only wav is supported")
 
+    text = request.input.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="input must not be empty")
+
     voice_design = request.instruct or VOICE_DESIGNS.get(request.voice)
     if not voice_design:
         raise HTTPException(
@@ -109,7 +113,7 @@ def audio_speech(request: RequestPayload) -> Response:
     started = time.perf_counter()
     try:
         audio = generate_audio(
-            text=request.input.strip(),
+            text=text,
             instruct=voice_design,
             language=request.language,
             response_format=request.response_format,
@@ -117,7 +121,7 @@ def audio_speech(request: RequestPayload) -> Response:
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Speech generation failed") from exc
 
     if not audio:
         raise HTTPException(status_code=500, detail="No audio generated")

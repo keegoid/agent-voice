@@ -61,3 +61,32 @@ def test_codex_voice_summary_rejects_voice_not_advertised_by_server(tmp_path: Pa
 
     assert result.returncode != 0
     assert server.requests == []
+
+
+def test_codex_voice_summary_allows_custom_instruct_without_listed_voice(tmp_path: Path) -> None:
+    helper = require_executable("codex-voice-summary")
+    output = tmp_path / "summary.wav"
+
+    with MockSpeechServer(voices=["warm_wisdom"]) as server:
+        result = run_with_home(
+            [
+                str(helper),
+                "--server",
+                server.url,
+                "--voice",
+                "custom_contract_voice",
+                "--instruct",
+                "Speak warmly and clearly.",
+                "--output",
+                str(output),
+                "--no-play",
+                "hello",
+            ],
+            tmp_path,
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert len(server.requests) == 1
+    request = server.requests[0].body
+    assert request["voice"] == "custom_contract_voice"
+    assert request["instruct"] == "Speak warmly and clearly."

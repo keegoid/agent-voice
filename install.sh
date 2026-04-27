@@ -5,6 +5,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/keegoid/codex-tts"
 ARCHIVE_URL="$REPO_URL/archive/refs/heads/main.tar.gz"
+ARCHIVE_SHA256="${CODEX_TTS_ARCHIVE_SHA256:-}"
 STATE_DIR="${CODEX_TTS_HOME:-$HOME/.codex-tts}"
 APP_DIR="$STATE_DIR/app"
 BIN_DIR="$STATE_DIR/bin"
@@ -20,7 +21,7 @@ TEST_MODE="${CODEX_TTS_TEST_MODE:-0}"
 
 usage() {
   cat <<'USAGE'
-Usage: install.sh [--dry-run] [--source-dir PATH]
+Usage: install.sh [--dry-run] [--source-dir PATH] [--archive-sha256 SHA256]
 USAGE
 }
 
@@ -33,6 +34,11 @@ while [[ $# -gt 0 ]]; do
     --source-dir)
       [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
       SOURCE_DIR="$2"
+      shift 2
+      ;;
+    --archive-sha256)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
+      ARCHIVE_SHA256="$2"
       shift 2
       ;;
     -h|--help)
@@ -107,6 +113,15 @@ find_source_dir() {
   temp_root="$(mktemp -d)"
   archive="$temp_root/codex-tts.tar.gz"
   curl -fsSL "$ARCHIVE_URL" -o "$archive"
+  if [[ -n "$ARCHIVE_SHA256" ]]; then
+    actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+    [[ "$actual" == "$ARCHIVE_SHA256" ]] || {
+      echo "Archive checksum mismatch" >&2
+      echo "expected: $ARCHIVE_SHA256" >&2
+      echo "actual:   $actual" >&2
+      exit 1
+    }
+  fi
   tar -xzf "$archive" -C "$temp_root"
   printf '%s\n' "$temp_root/codex-tts-main"
 }
@@ -240,6 +255,7 @@ else
 fi
 
 if [[ "$TEST_MODE" != "1" && "$DRY_RUN" -ne 1 ]]; then
+  say "Installing Python and MLX runtime dependencies into $APP_DIR"
   uv sync --project "$APP_DIR" --extra mlx
 fi
 

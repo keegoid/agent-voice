@@ -83,3 +83,36 @@ def test_end_to_end_install_disables_existing_local_server_py(tmp_path: Path) ->
     assert not stale_server.exists() or "stale local server" not in stale_server.read_text(encoding="utf-8")
     backup_root = home / ".codex-tts" / "backups"
     assert any(path.name == "server.py" for path in backup_root.rglob("*"))
+
+
+def test_uninstall_restores_preexisting_command_shim(tmp_path: Path) -> None:
+    installer = require_installer()
+    home = tmp_path / "home"
+    fake_bin = tmp_path / "fake-bin"
+    make_fake_bin(fake_bin, "launchctl", "#!/bin/sh\nexit 0\n")
+    original = home / ".local" / "bin" / "codex-speak"
+    original.parent.mkdir(parents=True)
+    original.write_text("#!/bin/sh\necho original speaker\n", encoding="utf-8")
+    original.chmod(0o755)
+
+    install = run_with_home(
+        [str(installer)],
+        tmp_path,
+        input_text="n\n",
+        extra_env={"PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}"},
+        timeout=20,
+    )
+
+    assert install.returncode == 0, install.stderr
+    assert "original speaker" not in original.read_text(encoding="utf-8")
+
+    command = installed_command(tmp_path, "codex-tts")
+    uninstall = run_with_home(
+        [str(command), "uninstall"],
+        tmp_path,
+        extra_env={"PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}"},
+        timeout=20,
+    )
+
+    assert uninstall.returncode == 0, uninstall.stderr
+    assert original.read_text(encoding="utf-8") == "#!/bin/sh\necho original speaker\n"

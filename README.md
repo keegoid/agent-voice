@@ -20,12 +20,21 @@ tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/codex
 The installer downloads a temporary installer first, then runs it. It does not
 pipe remote code into a shell.
 
+That command installs from the rolling `main` branch. For a fully auditable
+install, clone or download a pinned commit/tag, inspect it, then run
+`./install.sh --source-dir "$PWD"`. The installer also accepts
+`--archive-sha256 <sha256>` or `CODEX_TTS_ARCHIVE_SHA256` when installing from
+the remote archive.
+
 ## Requirements
 
 - macOS on Apple Silicon.
 - Python 3.12 or newer.
 - `uv`.
 - `curl`, `jq`, and `afplay` for the Codex speech helper.
+- Network access for the first install. The installer creates a local virtual
+  environment and downloads the MLX runtime/model dependencies into app-managed
+  state.
 
 ## What Gets Installed
 
@@ -54,6 +63,10 @@ codex-tts uninstall
 
 `codex-speak "message"` is intentionally safe: if the server is offline, it
 logs and exits successfully so the calling task can continue.
+
+Uninstall removes only shims that point at the managed `codex-tts` install. If
+an earlier shim was backed up during install, uninstall restores that previous
+file instead of deleting it.
 
 ## API
 

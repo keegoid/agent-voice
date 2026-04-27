@@ -5,6 +5,7 @@ set -euo pipefail
 
 server_url="${CODEX_TTS_SERVER:-http://127.0.0.1:8880}"
 voice="${CODEX_TTS_VOICE:-peng_mythic}"
+instruct=""
 output=""
 play=1
 
@@ -16,6 +17,7 @@ Usage:
 
 Options:
   -v, --voice NAME      Voice name. Default: peng_mythic.
+  -i, --instruct TEXT   Custom voice-design prompt; skips server voice lookup.
   -s, --server URL      TTS server URL. Default: http://127.0.0.1:8880.
   -o, --output PATH     Save WAV to PATH instead of a temp file.
   --no-play             Generate WAV but do not play it.
@@ -33,6 +35,11 @@ while [[ $# -gt 0 ]]; do
     -s|--server)
       [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
       server_url="${2%/}"
+      shift 2
+      ;;
+    -i|--instruct)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
+      instruct="$2"
       shift 2
       ;;
     -o|--output)
@@ -84,7 +91,7 @@ health="$(curl -fsS --max-time 3 "$server_url/v1/health")" || {
   exit 1
 }
 
-if ! jq -e --arg voice "$voice" '.voices | index($voice)' >/dev/null <<<"$health"; then
+if [[ -z "$instruct" ]] && ! jq -e --arg voice "$voice" '.voices | index($voice)' >/dev/null <<<"$health"; then
   voices="$(jq -r '.voices | join(", ")' <<<"$health")"
   echo "Unknown voice '$voice'. Available: $voices" >&2
   exit 1
@@ -110,8 +117,10 @@ payload="$(
     --arg model "qwen3-tts" \
     --arg input "$text" \
     --arg voice "$voice" \
+    --arg instruct "$instruct" \
     --arg response_format "wav" \
-    '{model: $model, input: $input, voice: $voice, response_format: $response_format}'
+    '{model: $model, input: $input, voice: $voice, response_format: $response_format}
+      + (if $instruct == "" then {} else {instruct: $instruct} end)'
 )"
 
 curl -fsS --max-time 180 \

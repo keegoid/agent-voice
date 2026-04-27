@@ -47,6 +47,17 @@ def test_speech_rejects_unknown_voice_without_instruct() -> None:
     assert response.status_code == 400
 
 
+def test_speech_rejects_whitespace_only_input() -> None:
+    client = TestClient(locate_fastapi_app())
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={"input": "   ", "voice": "peng_mythic", "response_format": "wav"},
+    )
+
+    assert response.status_code == 400
+
+
 def test_speech_accepts_custom_voice_when_instruct_is_provided(monkeypatch: pytest.MonkeyPatch) -> None:
     app = locate_fastapi_app()
 

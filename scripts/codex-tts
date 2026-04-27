@@ -32,6 +32,30 @@ latest_backup() {
   find "$(backup_root)" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -n 1
 }
 
+restore_or_remove_shim() {
+  name="$1"
+  shim="$LOCAL_BIN/$name"
+  [[ -e "$shim" ]] || return 0
+  if ! grep -Fq "exec \"$STATE_DIR/bin/$name\"" "$shim" 2>/dev/null; then
+    echo "Skipping unmanaged shim $shim"
+    return 0
+  fi
+
+  backup="$(latest_backup)"
+  saved=""
+  if [[ -n "$backup" ]]; then
+    saved="$backup/home/.local/bin/$name"
+  fi
+  if [[ -n "$saved" && -f "$saved" ]]; then
+    mkdir -p "$(dirname "$shim")"
+    cp -a "$saved" "$shim"
+    echo "Restored previous shim $shim"
+  else
+    rm -f "$shim"
+    echo "Removed shim $shim"
+  fi
+}
+
 restore_backup() {
   backup="$1"
   [[ -d "$backup" ]] || { echo "Backup not found: $backup" >&2; exit 1; }
@@ -88,7 +112,9 @@ case "$cmd" in
       destroy_caches=1
     fi
     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || launchctl bootout "$DOMAIN" "$PLIST" 2>/dev/null || true
-    rm -f "$LOCAL_BIN/codex-tts" "$LOCAL_BIN/codex-speak" "$LOCAL_BIN/codex-voice-summary"
+    restore_or_remove_shim "codex-tts"
+    restore_or_remove_shim "codex-speak"
+    restore_or_remove_shim "codex-voice-summary"
     rm -f "$PLIST"
     rm -rf "$STATE_DIR/app" "$STATE_DIR/bin"
     if [[ "$destroy_caches" -eq 1 ]]; then
