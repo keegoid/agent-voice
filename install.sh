@@ -159,7 +159,9 @@ find_source_dir() {
     exit 1
   fi
   tar -xzf "$archive" -C "$temp_root"
-  printf '%s\n' "$temp_root/codex-tts-main"
+  extracted="$(find "$temp_root" -mindepth 1 -maxdepth 1 -type d -name 'codex-tts-*' | sort | head -n 1)"
+  [[ -n "$extracted" ]] || { echo "Archive did not contain a codex-tts source directory" >&2; exit 1; }
+  printf '%s\n' "$extracted"
 }
 
 write_shim() {

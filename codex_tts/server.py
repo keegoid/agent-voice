@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import os
+import threading
 import time
 import numpy as np
 import soundfile as sf
@@ -18,6 +19,7 @@ TTS_MODEL_ID = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
 
 app = FastAPI(title="codex-tts", version="0.1.0")
 _tts_model = None
+_tts_model_lock = threading.Lock()
 
 
 class RequestPayload(BaseModel):
@@ -33,20 +35,29 @@ def get_tts_model():
     """Load the MLX model lazily; health checks must stay cheap."""
     global _tts_model
     if _tts_model is None:
-        if os.getenv("CODEX_TTS_DISABLE_MODEL_LOAD") == "1":
-            raise RuntimeError("model loading disabled")
-        try:
-            from mlx_audio.tts.utils import load_model as mlx_load_model
-        except Exception as exc:  # pragma: no cover - depends on optional runtime
-            raise RuntimeError(
-                "MLX audio runtime is not installed; run the installer or install the mlx extra"
-            ) from exc
-
-        started = time.perf_counter()
-        print(f"Loading TTS model {TTS_MODEL_ID}...")
-        _tts_model = mlx_load_model(TTS_MODEL_ID)
-        print(f"TTS model loaded in {time.perf_counter() - started:.1f}s")
+        with _tts_model_lock:
+            if _tts_model is not None:
+                return _tts_model
+            _tts_model = _load_tts_model()
     return _tts_model
+
+
+def _load_tts_model():
+    """Load the optional MLX runtime model."""
+    if os.getenv("CODEX_TTS_DISABLE_MODEL_LOAD") == "1":
+        raise RuntimeError("model loading disabled")
+    try:
+        from mlx_audio.tts.utils import load_model as mlx_load_model
+    except Exception as exc:  # pragma: no cover - depends on optional runtime
+        raise RuntimeError(
+            "MLX audio runtime is not installed; run the installer or install the mlx extra"
+        ) from exc
+
+    started = time.perf_counter()
+    print(f"Loading TTS model {TTS_MODEL_ID}...")
+    model = mlx_load_model(TTS_MODEL_ID)
+    print(f"TTS model loaded in {time.perf_counter() - started:.1f}s")
+    return model
 
 
 def generate_audio(
@@ -136,6 +147,7 @@ def audio_speech(request: RequestPayload) -> Response:
 
 
 def main() -> None:
+    # The service has no auth layer; keep the default host loopback-only.
     host = os.getenv("CODEX_TTS_HOST", "127.0.0.1")
     port = int(os.getenv("CODEX_TTS_PORT", "8880"))
     uvicorn.run("codex_tts.server:app", host=host, port=port)
