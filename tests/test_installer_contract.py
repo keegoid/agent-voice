@@ -17,7 +17,7 @@ def test_installer_dry_run_does_not_modify_existing_user_files(tmp_path: Path) -
     installer = require_installer()
     home = tmp_path / "home"
     agents = home / ".codex" / "AGENTS.md"
-    shim = home / ".local" / "bin" / "codex-speak"
+    shim = home / ".local" / "bin" / "agent-speak"
     agents.parent.mkdir(parents=True)
     shim.parent.mkdir(parents=True)
     agents.write_text("operator notes\n", encoding="utf-8")
@@ -49,11 +49,11 @@ def test_installer_backs_up_agents_before_restore(tmp_path: Path) -> None:
     )
 
     assert install.returncode == 0, install.stderr
-    backups = sorted((home / ".codex-tts" / "backups").glob("*"))
+    backups = sorted((home / ".agent-voice" / "backups").glob("*"))
     assert backups, "installer must create a timestamped backup set before editing"
     assert any(path.name == "AGENTS.md" and path.read_text(encoding="utf-8") == "original codex config\n" for path in backups[0].rglob("*"))
 
-    command = installed_command(tmp_path, "codex-tts")
+    command = installed_command(tmp_path, "agent-voice")
     if not command.exists():
         return
     restore = run_command_from_temp_path(tmp_path, [str(command), "restore"], timeout=20)
@@ -67,7 +67,7 @@ def test_end_to_end_install_disables_existing_local_server_py(tmp_path: Path) ->
     home = tmp_path / "home"
     fake_bin = tmp_path / "fake-bin"
     make_fake_bin(fake_bin, "launchctl", "#!/bin/sh\nexit 0\n")
-    stale_server = home / ".codex-tts" / "server.py"
+    stale_server = home / ".agent-voice" / "server.py"
     stale_server.parent.mkdir(parents=True)
     stale_server.write_text("raise SystemExit('stale local server')\n", encoding="utf-8")
 
@@ -81,7 +81,7 @@ def test_end_to_end_install_disables_existing_local_server_py(tmp_path: Path) ->
 
     assert result.returncode == 0, result.stderr
     assert not stale_server.exists() or "stale local server" not in stale_server.read_text(encoding="utf-8")
-    backup_root = home / ".codex-tts" / "backups"
+    backup_root = home / ".agent-voice" / "backups"
     assert any(path.name == "server.py" for path in backup_root.rglob("*"))
 
 
@@ -90,7 +90,7 @@ def test_uninstall_restores_preexisting_command_shim(tmp_path: Path) -> None:
     home = tmp_path / "home"
     fake_bin = tmp_path / "fake-bin"
     make_fake_bin(fake_bin, "launchctl", "#!/bin/sh\nexit 0\n")
-    original = home / ".local" / "bin" / "codex-speak"
+    original = home / ".local" / "bin" / "agent-speak"
     original.parent.mkdir(parents=True)
     original.write_text("#!/bin/sh\necho original speaker\n", encoding="utf-8")
     original.chmod(0o755)
@@ -116,7 +116,7 @@ def test_uninstall_restores_preexisting_command_shim(tmp_path: Path) -> None:
 
     assert reinstall.returncode == 0, reinstall.stderr
 
-    command = installed_command(tmp_path, "codex-tts")
+    command = installed_command(tmp_path, "agent-voice")
     uninstall = run_with_home(
         [str(command), "uninstall"],
         tmp_path,
@@ -141,10 +141,11 @@ def test_uninstall_does_not_restore_managed_shim_when_no_original_exists(tmp_pat
     second = run_with_home([str(installer)], tmp_path, input_text="n\n", extra_env=env, timeout=20)
     assert second.returncode == 0, second.stderr
 
-    command = installed_command(tmp_path, "codex-tts")
+    command = installed_command(tmp_path, "agent-voice")
     uninstall = run_with_home([str(command), "uninstall"], tmp_path, extra_env=env, timeout=20)
 
     assert uninstall.returncode == 0, uninstall.stderr
+    assert not installed_command(tmp_path, "agent-speak").exists()
     assert not installed_command(tmp_path, "codex-speak").exists()
 
 
@@ -202,6 +203,7 @@ def test_installer_fails_when_launchd_bootstrap_fails(tmp_path: Path) -> None:
         tmp_path,
         input_text="n\n",
         extra_env={
+            "AGENT_VOICE_TEST_MODE": "0",
             "CODEX_TTS_TEST_MODE": "0",
             "PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}",
         },

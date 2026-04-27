@@ -1,0 +1,5 @@
+"""Public package for the agent-voice local speech server."""
+
+__all__ = ["__version__"]
+
+__version__ = "0.2.0"

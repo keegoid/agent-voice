@@ -1,5 +1,5 @@
-"""Public package for the codex-tts local speech server."""
+"""Compatibility package for older codex-tts imports."""
+
+from agent_voice import __version__
 
 __all__ = ["__version__"]
-
-__version__ = "0.1.0"

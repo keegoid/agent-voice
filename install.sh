@@ -1,24 +1,38 @@
 #!/usr/bin/env bash
-# Non-destructive installer for codex-tts.
+# Non-destructive installer for agent-voice.
 
 set -euo pipefail
 
-REPO_URL="https://github.com/keegoid/codex-tts"
-ARCHIVE_REF="${CODEX_TTS_REF:-main}"
+REPO_URL="https://github.com/keegoid/agent-voice"
+ARCHIVE_REF="${AGENT_VOICE_REF:-${CODEX_TTS_REF:-main}}"
 ARCHIVE_URL="$REPO_URL/archive/$ARCHIVE_REF.tar.gz"
-ARCHIVE_SHA256="${CODEX_TTS_ARCHIVE_SHA256:-}"
-STATE_DIR="${CODEX_TTS_HOME:-$HOME/.codex-tts}"
+ARCHIVE_SHA256="${AGENT_VOICE_ARCHIVE_SHA256:-${CODEX_TTS_ARCHIVE_SHA256:-}}"
+LEGACY_STATE_DIR="$HOME/.codex-tts"
+DEFAULT_STATE_DIR="$HOME/.agent-voice"
+if [[ -n "${AGENT_VOICE_HOME:-}" ]]; then
+  STATE_DIR="$AGENT_VOICE_HOME"
+elif [[ -n "${CODEX_TTS_HOME:-}" ]]; then
+  STATE_DIR="$CODEX_TTS_HOME"
+elif [[ -d "$LEGACY_STATE_DIR/model-cache" && ! -d "$DEFAULT_STATE_DIR/model-cache" ]]; then
+  STATE_DIR="$LEGACY_STATE_DIR"
+elif [[ -d "$LEGACY_STATE_DIR" && ! -d "$DEFAULT_STATE_DIR" ]]; then
+  STATE_DIR="$LEGACY_STATE_DIR"
+else
+  STATE_DIR="$DEFAULT_STATE_DIR"
+fi
 APP_DIR="$STATE_DIR/app"
 BIN_DIR="$STATE_DIR/bin"
 BACKUP_ROOT="$STATE_DIR/backups"
 LOG_DIR="$STATE_DIR/logs"
 MODEL_CACHE="$STATE_DIR/model-cache"
 LOCAL_BIN="$HOME/.local/bin"
-LABEL="com.keegoid.codex-tts"
+LABEL="com.keegoid.agent-voice"
+LEGACY_LABEL="com.keegoid.codex-tts"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+LEGACY_PLIST="$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist"
 DRY_RUN=0
-SOURCE_DIR="${CODEX_TTS_SOURCE_DIR:-}"
-TEST_MODE="${CODEX_TTS_TEST_MODE:-0}"
+SOURCE_DIR="${AGENT_VOICE_SOURCE_DIR:-${CODEX_TTS_SOURCE_DIR:-}}"
+TEST_MODE="${AGENT_VOICE_TEST_MODE:-${CODEX_TTS_TEST_MODE:-0}}"
 
 usage() {
   cat <<'USAGE'
@@ -116,13 +130,13 @@ find_source_dir() {
   fi
 
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [[ -f "$script_dir/pyproject.toml" && -d "$script_dir/codex_tts" ]]; then
+  if [[ -f "$script_dir/pyproject.toml" && -d "$script_dir/agent_voice" ]]; then
     printf '%s\n' "$script_dir"
     return
   fi
 
   temp_root="$(mktemp -d)"
-  archive="$temp_root/codex-tts.tar.gz"
+  archive="$temp_root/agent-voice.tar.gz"
   if [[ -z "$ARCHIVE_SHA256" ]]; then
     warn "Remote archive installs require --archive-sha256."
     warn "For an auditable install, clone a pinned commit and run: ./install.sh --source-dir \"\$PWD\""
@@ -150,8 +164,8 @@ find_source_dir() {
     exit 1
   fi
   tar -xzf "$archive" -C "$temp_root"
-  extracted="$(find "$temp_root" -mindepth 1 -maxdepth 1 -type d -name 'codex-tts-*' | sort | head -n 1)"
-  [[ -n "$extracted" ]] || { echo "Archive did not contain a codex-tts source directory" >&2; exit 1; }
+  extracted="$(find "$temp_root" -mindepth 1 -maxdepth 1 -type d \( -name 'agent-voice-*' -o -name 'codex-tts-*' \) | sort | head -n 1)"
+  [[ -n "$extracted" ]] || { echo "Archive did not contain an agent-voice source directory" >&2; exit 1; }
   printf '%s\n' "$extracted"
 }
 
@@ -167,7 +181,9 @@ write_shim() {
   mkdir -p "$LOCAL_BIN"
   cat >"$shim" <<EOF
 #!/usr/bin/env bash
-# codex-tts-managed-shim
+# agent-voice-managed-shim
+export AGENT_VOICE_HOME="\${AGENT_VOICE_HOME:-\${CODEX_TTS_HOME:-$STATE_DIR}}"
+export CODEX_TTS_HOME="\${CODEX_TTS_HOME:-\$AGENT_VOICE_HOME}"
 exec "$target" "\$@"
 EOF
   chmod 755 "$shim"
@@ -192,7 +208,7 @@ write_plist() {
     <string>$APP_DIR/.venv/bin/python</string>
     <string>-m</string>
     <string>uvicorn</string>
-    <string>codex_tts.server:app</string>
+    <string>agent_voice.server:app</string>
     <string>--host</string>
     <string>127.0.0.1</string>
     <string>--port</string>
@@ -208,6 +224,10 @@ write_plist() {
     <string>$LOCAL_BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>HF_HOME</key>
     <string>$MODEL_CACHE/huggingface</string>
+    <key>AGENT_VOICE_HOME</key>
+    <string>$STATE_DIR</string>
+    <key>CODEX_TTS_HOME</key>
+    <string>$STATE_DIR</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -228,7 +248,15 @@ start_launchd_service() {
   local domain="gui/$(id -u)"
   local err_file
   local attempt
-  err_file="$(mktemp "${TMPDIR:-/tmp}/codex-tts-launchctl.XXXXXX")"
+  err_file="$(mktemp "${TMPDIR:-/tmp}/agent-voice-launchctl.XXXXXX")"
+  if run launchctl print "$domain/$LEGACY_LABEL" >/dev/null 2>&1; then
+    if ! run launchctl bootout "$domain/$LEGACY_LABEL" 2>"$err_file"; then
+      warn "launchctl bootout failed for $LEGACY_LABEL:"
+      cat "$err_file" >&2
+      rm -f "$err_file"
+      return 1
+    fi
+  fi
   if run launchctl print "$domain/$LABEL" >/dev/null 2>&1; then
     if ! run launchctl bootout "$domain/$LABEL" 2>"$err_file"; then
       warn "launchctl bootout failed for $LABEL:"
@@ -288,11 +316,11 @@ EOF
 }
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  say "codex-tts dry-run: no files will be modified"
+  say "agent-voice dry-run: no files will be modified"
 else
   if [[ "$TEST_MODE" != "1" ]]; then
     [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || {
-      echo "codex-tts v1 supports macOS Apple Silicon only" >&2
+      echo "agent-voice v1 supports macOS Apple Silicon only" >&2
       exit 1
     }
     command -v uv >/dev/null || { echo "uv not found; install uv first" >&2; exit 1; }
@@ -301,26 +329,44 @@ else
 fi
 
 src="$(find_source_dir)"
-[[ -d "$src/codex_tts" ]] || { echo "Source directory missing codex_tts package: $src" >&2; exit 1; }
+[[ -d "$src/agent_voice" ]] || { echo "Source directory missing agent_voice package: $src" >&2; exit 1; }
+for required in \
+  "$src/scripts/agent-voice" \
+  "$src/scripts/agent-speak" \
+  "$src/scripts/agent-voice-summary" \
+  "$src/scripts/codex-tts" \
+  "$src/scripts/codex-speak" \
+  "$src/scripts/codex-voice-summary"
+do
+  [[ -f "$required" ]] || { echo "Source directory missing required script: $required" >&2; exit 1; }
+done
 
 backup_path "$APP_DIR"
 backup_path "$BIN_DIR"
 backup_path "$STATE_DIR/server.py"
+backup_path "$LEGACY_PLIST"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   would "install app from $src to $APP_DIR"
 else
   rm -rf "$APP_DIR" "$BIN_DIR"
   mkdir -p "$APP_DIR" "$BIN_DIR"
-  cp -R "$src/codex_tts" "$APP_DIR/codex_tts"
+  cp -R "$src/agent_voice" "$APP_DIR/agent_voice"
+  if [[ -d "$src/codex_tts" ]]; then
+    cp -R "$src/codex_tts" "$APP_DIR/codex_tts"
+  fi
   cp "$src/pyproject.toml" "$APP_DIR/pyproject.toml"
   if [[ -f "$src/uv.lock" ]]; then
     cp "$src/uv.lock" "$APP_DIR/uv.lock"
   fi
   cp "$src/README.md" "$APP_DIR/README.md"
+  cp "$src/scripts/agent-voice" "$BIN_DIR/agent-voice"
+  cp "$src/scripts/agent-speak" "$BIN_DIR/agent-speak"
+  cp "$src/scripts/agent-voice-summary" "$BIN_DIR/agent-voice-summary"
   cp "$src/scripts/codex-tts" "$BIN_DIR/codex-tts"
   cp "$src/scripts/codex-speak" "$BIN_DIR/codex-speak"
   cp "$src/scripts/codex-voice-summary" "$BIN_DIR/codex-voice-summary"
+  chmod 755 "$BIN_DIR/agent-voice" "$BIN_DIR/agent-speak" "$BIN_DIR/agent-voice-summary"
   chmod 755 "$BIN_DIR/codex-tts" "$BIN_DIR/codex-speak" "$BIN_DIR/codex-voice-summary"
   rm -f "$STATE_DIR/server.py"
 fi
@@ -334,12 +380,15 @@ if [[ "$TEST_MODE" != "1" && "$DRY_RUN" -ne 1 ]]; then
   }
 fi
 
+write_shim "agent-voice" "$BIN_DIR/agent-voice"
+write_shim "agent-speak" "$BIN_DIR/agent-speak"
+write_shim "agent-voice-summary" "$BIN_DIR/agent-voice-summary"
 write_shim "codex-tts" "$BIN_DIR/codex-tts"
 write_shim "codex-speak" "$BIN_DIR/codex-speak"
 write_shim "codex-voice-summary" "$BIN_DIR/codex-voice-summary"
 case ":$PATH:" in
   *":$LOCAL_BIN:"*) ;;
-  *) warn "Warning: $LOCAL_BIN is not on PATH; add it to your shell profile to use codex-tts commands." ;;
+  *) warn "Warning: $LOCAL_BIN is not on PATH; add it to your shell profile to use agent-voice commands." ;;
 esac
 write_plist
 
@@ -362,5 +411,5 @@ if [[ "$TEST_MODE" != "1" && "$DRY_RUN" -ne 1 ]]; then
   start_launchd_service
 fi
 
-say "codex-tts installed"
+say "agent-voice installed"
 say "Backups: $backup_dir"
