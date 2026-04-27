@@ -28,7 +28,7 @@ class RequestPayload(BaseModel):
     voice: str = "peng_mythic"
     response_format: str = "wav"
     language: str = "English"
-    instruct: str | None = None
+    instruct: str | None = Field(default=None, max_length=4000)
 
 
 def get_tts_model():

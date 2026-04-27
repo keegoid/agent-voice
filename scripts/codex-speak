@@ -67,7 +67,18 @@ if [[ ! -x "$python" ]]; then
 fi
 [[ -n "$python" ]] || exit 0
 
-"$python" - "$0" "$helper" "$log" "$@" >/dev/null 2>&1 <<'PY'
+script_path="$0"
+case "$script_path" in
+  */*) ;;
+  *)
+    resolved="$(command -v -- "$script_path" 2>/dev/null || true)"
+    [[ -n "$resolved" ]] || exit 0
+    script_path="$resolved"
+    ;;
+esac
+[[ -x "$script_path" ]] || exit 0
+
+"$python" - "$script_path" "$helper" "$log" "$@" >/dev/null 2>&1 <<'PY'
 import os
 import subprocess
 import sys
