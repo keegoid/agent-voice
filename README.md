@@ -14,17 +14,15 @@ helpers that make voice cues best-effort instead of task-breaking.
 Version 1 supports macOS Apple Silicon only.
 
 ```bash
-tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/codex-tts/main/install.sh -o "$tmp/install.sh" && bash "$tmp/install.sh"
+tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/codex-tts/main/install.sh -o "$tmp/install.sh" && bash "$tmp/install.sh" --allow-unpinned
 ```
 
-The installer downloads a temporary installer first, then runs it. It does not
-pipe remote code into a shell.
-
-That command installs from the rolling `main` branch. For a fully auditable
-install, clone or download a pinned commit/tag, inspect it, then run
-`./install.sh --source-dir "$PWD"`. The installer also accepts
-`--archive-sha256 <sha256>` or `CODEX_TTS_ARCHIVE_SHA256` when installing from
-the remote archive.
+The convenience command downloads a temporary installer first, then runs it; it
+does not pipe remote bytes directly into a shell. It does trust the rolling
+`main` archive over HTTPS. For an integrity-pinned install, clone or download a
+pinned commit/tag, inspect it, then run `./install.sh --source-dir "$PWD"`.
+Remote archive installs can also pass `--archive-sha256 <sha256>` or
+`CODEX_TTS_ARCHIVE_SHA256`.
 
 ## Requirements
 

@@ -100,7 +100,8 @@ def audio_speech(request: RequestPayload) -> Response:
     if not text:
         raise HTTPException(status_code=400, detail="input must not be empty")
 
-    voice_design = request.instruct or VOICE_DESIGNS.get(request.voice)
+    custom_instruct = request.instruct.strip() if request.instruct else ""
+    voice_design = custom_instruct or VOICE_DESIGNS.get(request.voice)
     if not voice_design:
         raise HTTPException(
             status_code=400,

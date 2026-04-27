@@ -99,6 +99,9 @@ case "$cmd" in
     if [[ "${1:-}" == "--backup" ]]; then
       [[ $# -ge 2 ]] || { echo "Missing backup id" >&2; exit 2; }
       selected="$(backup_root)/$2"
+    elif [[ $# -gt 0 ]]; then
+      echo "Unknown restore option: $1" >&2
+      exit 2
     else
       selected="$(latest_backup)"
     fi

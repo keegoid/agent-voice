@@ -6,6 +6,7 @@ set -euo pipefail
 REPO_URL="https://github.com/keegoid/codex-tts"
 ARCHIVE_URL="$REPO_URL/archive/refs/heads/main.tar.gz"
 ARCHIVE_SHA256="${CODEX_TTS_ARCHIVE_SHA256:-}"
+ALLOW_UNPINNED="${CODEX_TTS_ALLOW_UNPINNED:-0}"
 STATE_DIR="${CODEX_TTS_HOME:-$HOME/.codex-tts}"
 APP_DIR="$STATE_DIR/app"
 BIN_DIR="$STATE_DIR/bin"
@@ -21,7 +22,7 @@ TEST_MODE="${CODEX_TTS_TEST_MODE:-0}"
 
 usage() {
   cat <<'USAGE'
-Usage: install.sh [--dry-run] [--source-dir PATH] [--archive-sha256 SHA256]
+Usage: install.sh [--dry-run] [--source-dir PATH] [--archive-sha256 SHA256] [--allow-unpinned]
 USAGE
 }
 
@@ -40,6 +41,10 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
       ARCHIVE_SHA256="$2"
       shift 2
+      ;;
+    --allow-unpinned)
+      ALLOW_UNPINNED=1
+      shift
       ;;
     -h|--help)
       usage
@@ -112,6 +117,14 @@ find_source_dir() {
 
   temp_root="$(mktemp -d)"
   archive="$temp_root/codex-tts.tar.gz"
+  if [[ -z "$ARCHIVE_SHA256" && "$ALLOW_UNPINNED" != "1" ]]; then
+    echo "Remote archive installs require --archive-sha256 unless --allow-unpinned is set." >&2
+    echo "For an auditable install, clone a pinned commit and run: ./install.sh --source-dir \"\$PWD\"" >&2
+    exit 1
+  fi
+  if [[ -z "$ARCHIVE_SHA256" ]]; then
+    say "Warning: installing from rolling main without an archive checksum"
+  fi
   curl -fsSL "$ARCHIVE_URL" -o "$archive"
   if [[ -n "$ARCHIVE_SHA256" ]]; then
     actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
@@ -122,6 +135,14 @@ find_source_dir() {
       exit 1
     }
   fi
+  while IFS= read -r member; do
+    case "$member" in
+      /*|*../*)
+        echo "Unsafe archive path: $member" >&2
+        exit 1
+        ;;
+    esac
+  done < <(tar -tzf "$archive")
   tar -xzf "$archive" -C "$temp_root"
   printf '%s\n' "$temp_root/codex-tts-main"
 }
