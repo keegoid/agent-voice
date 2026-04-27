@@ -38,6 +38,8 @@ _tts_model = None
 _stt_model = None
 _tts_model_lock = threading.Lock()
 _stt_model_lock = threading.Lock()
+_dropped_stt_options_lock = threading.Lock()
+_logged_dropped_stt_options: set[tuple[str, ...]] = set()
 
 
 class RequestPayload(BaseModel):
@@ -226,8 +228,17 @@ def _filter_generation_kwargs(model: Any, gen_kwargs: dict[str, Any]) -> dict[st
     filtered = {key: value for key, value in gen_kwargs.items() if key in allowed}
     dropped = sorted(set(gen_kwargs) - set(filtered))
     if dropped:
-        print(f"Dropping unsupported STT generation options: {', '.join(dropped)}", file=sys.stderr)
+        _log_dropped_stt_options_once(dropped)
     return filtered
+
+
+def _log_dropped_stt_options_once(options: list[str]) -> None:
+    key = tuple(options)
+    with _dropped_stt_options_lock:
+        if key in _logged_dropped_stt_options:
+            return
+        _logged_dropped_stt_options.add(key)
+    print(f"Dropping unsupported STT generation options: {', '.join(options)}", file=sys.stderr)
 
 
 async def _read_upload_limited(file: UploadFile, max_bytes: int) -> bytes:
@@ -370,12 +381,18 @@ async def audio_transcriptions(
 
 def main() -> None:
     # The service has no auth layer; keep the default host loopback-only.
-    host = os.getenv("AGENT_VOICE_HOST") or os.getenv("CODEX_TTS_HOST") or "127.0.0.1"
-    allow_remote = os.getenv("AGENT_VOICE_ALLOW_REMOTE") == "1" or os.getenv("CODEX_TTS_ALLOW_REMOTE") == "1"
+    host, allow_remote = _server_bind_config()
     if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
         raise SystemExit("Refusing non-loopback AGENT_VOICE_HOST without AGENT_VOICE_ALLOW_REMOTE=1")
     port = int(os.getenv("AGENT_VOICE_PORT") or os.getenv("CODEX_TTS_PORT") or "8880")
     uvicorn.run("agent_voice.server:app", host=host, port=port)
+
+
+def _server_bind_config() -> tuple[str, bool]:
+    agent_host = os.getenv("AGENT_VOICE_HOST")
+    if agent_host:
+        return agent_host, os.getenv("AGENT_VOICE_ALLOW_REMOTE") == "1"
+    return os.getenv("CODEX_TTS_HOST") or "127.0.0.1", os.getenv("CODEX_TTS_ALLOW_REMOTE") == "1"
 
 
 if __name__ == "__main__":

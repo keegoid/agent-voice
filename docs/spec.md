@@ -90,6 +90,8 @@ Public voice names are:
 
 `codex-tts`, `codex-speak`, and `codex-voice-summary` remain compatibility
 aliases for Codex-specific workflows.
+`CODEX_TTS_*` environment variables remain compatibility aliases during the
+0.x upgrade path; new integrations should use `AGENT_VOICE_*`.
 
 ## Installer
 

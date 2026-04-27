@@ -9,6 +9,8 @@ if [[ -n "${AGENT_VOICE_HOME:-}" ]]; then
   STATE_DIR="$AGENT_VOICE_HOME"
 elif [[ -n "${CODEX_TTS_HOME:-}" ]]; then
   STATE_DIR="$CODEX_TTS_HOME"
+elif [[ -d "$LEGACY_STATE_DIR/model-cache" && ! -d "$DEFAULT_STATE_DIR/model-cache" ]]; then
+  STATE_DIR="$LEGACY_STATE_DIR"
 elif [[ -d "$LEGACY_STATE_DIR" && ! -d "$DEFAULT_STATE_DIR" ]]; then
   STATE_DIR="$LEGACY_STATE_DIR"
 else
@@ -157,8 +159,14 @@ case "$cmd" in
     rm -f "$PLIST"
     rm -f "$LEGACY_PLIST"
     rm -rf "$STATE_DIR/app" "$STATE_DIR/bin"
+    if [[ "$STATE_DIR" != "$LEGACY_STATE_DIR" ]]; then
+      rm -rf "$LEGACY_STATE_DIR/app" "$LEGACY_STATE_DIR/bin"
+    fi
     if [[ "$destroy_caches" -eq 1 ]]; then
       rm -rf "$STATE_DIR/model-cache"
+      if [[ "$STATE_DIR" != "$LEGACY_STATE_DIR" ]]; then
+        rm -rf "$LEGACY_STATE_DIR/model-cache"
+      fi
     fi
     echo "agent-voice uninstalled"
     ;;

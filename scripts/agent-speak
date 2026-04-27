@@ -17,7 +17,9 @@ fi
 
 state_dir="${AGENT_VOICE_HOME:-${CODEX_TTS_HOME:-}}"
 if [[ -z "$state_dir" ]]; then
-  if [[ -d "$HOME/.agent-voice" || ! -d "$HOME/.codex-tts" ]]; then
+  if [[ -d "$HOME/.codex-tts/model-cache" && ! -d "$HOME/.agent-voice/model-cache" ]]; then
+    state_dir="$HOME/.codex-tts"
+  elif [[ -d "$HOME/.agent-voice" || ! -d "$HOME/.codex-tts" ]]; then
     state_dir="$HOME/.agent-voice"
   else
     state_dir="$HOME/.codex-tts"

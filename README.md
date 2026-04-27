@@ -93,6 +93,8 @@ agent-voice uninstall
 `agent-speak "message"` is intentionally safe: if the server is offline, it
 logs and exits successfully so the calling task can continue.
 `codex-speak` remains as a compatibility alias for Codex-specific workflows.
+Prefer `AGENT_VOICE_*` environment variables for new integrations; `CODEX_TTS_*`
+aliases are retained for the 0.x compatibility window.
 
 Uninstall removes only shims that point at the managed `agent-voice` install. If
 an earlier shim was backed up during install, uninstall restores that previous

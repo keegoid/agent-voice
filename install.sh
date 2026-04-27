@@ -13,6 +13,8 @@ if [[ -n "${AGENT_VOICE_HOME:-}" ]]; then
   STATE_DIR="$AGENT_VOICE_HOME"
 elif [[ -n "${CODEX_TTS_HOME:-}" ]]; then
   STATE_DIR="$CODEX_TTS_HOME"
+elif [[ -d "$LEGACY_STATE_DIR/model-cache" && ! -d "$DEFAULT_STATE_DIR/model-cache" ]]; then
+  STATE_DIR="$LEGACY_STATE_DIR"
 elif [[ -d "$LEGACY_STATE_DIR" && ! -d "$DEFAULT_STATE_DIR" ]]; then
   STATE_DIR="$LEGACY_STATE_DIR"
 else

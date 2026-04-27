@@ -191,6 +191,19 @@ def test_stt_filter_drops_unsafe_decode_options_with_var_kwargs() -> None:
     }
 
 
+def test_agent_voice_allow_remote_must_match_agent_voice_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    monkeypatch.setenv("AGENT_VOICE_HOST", "0.0.0.0")
+    monkeypatch.delenv("AGENT_VOICE_ALLOW_REMOTE", raising=False)
+    monkeypatch.setenv("CODEX_TTS_ALLOW_REMOTE", "1")
+
+    host, allow_remote = server._server_bind_config()
+
+    assert host == "0.0.0.0"
+    assert allow_remote is False
+
+
 def test_transcription_returns_buffered_ndjson_from_mock_model(monkeypatch: pytest.MonkeyPatch) -> None:
     import agent_voice.server as server
 
