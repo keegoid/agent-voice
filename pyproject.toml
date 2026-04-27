@@ -1,6 +1,6 @@
 [project]
 name = "agent-voice"
-version = "0.2.0"
+version = "0.2.1"
 description = "macOS Apple Silicon speech and transcription server for local agents"
 readme = "README.md"
 requires-python = ">=3.12"

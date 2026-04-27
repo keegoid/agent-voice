@@ -21,7 +21,7 @@ the same preset can sometimes land with surprising energy, emotion, or timing.
 Version 1 supports macOS Apple Silicon only.
 
 ```bash
-tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/agent-voice/v0.2.0/install.sh -o "$tmp/install.sh" && git clone --depth 1 --branch v0.2.0 https://github.com/keegoid/agent-voice "$tmp/source" && bash "$tmp/install.sh" --source-dir "$tmp/source"
+tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/agent-voice/v0.2.1/install.sh -o "$tmp/install.sh" && git clone --depth 1 --branch v0.2.1 https://github.com/keegoid/agent-voice "$tmp/source" && bash "$tmp/install.sh" --source-dir "$tmp/source"
 ```
 
 The convenience command downloads a temporary installer first, then runs it. It
@@ -75,6 +75,13 @@ The Whisper MLX repository does not ship the processor metadata that
 experiments; treat it as trust-sensitive because it controls Hugging Face model
 loading.
 
+Speech generation defaults to `AGENT_VOICE_TTS_MAX_TOKENS=24000`. There is no
+request character cap; long requests are split into bounded synthesis segments
+and concatenated so agent summaries can stay useful without caller-side
+trimming. If a generated segment is implausibly short for the text length, the
+server retries it once with more conservative sampling.
+Segment joins use `AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS=0.18` by default.
+
 The launchd service sets `HF_HOME` to
 `~/.agent-voice/model-cache/huggingface`, so Hugging Face/MLX model files are
 kept under `~/.agent-voice/model-cache` for fresh installs.
@@ -116,7 +123,7 @@ Speech:
 ```bash
 curl -fsS http://127.0.0.1:8880/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3-tts","input":"The agent finished the task.","voice":"cyberpunk_cool","response_format":"wav"}' \
+  -d '{"model":"qwen3-tts","input":"The agent finished the task.","voice":"cyberpunk_cool","response_format":"wav","max_tokens":24000}' \
   -o speech.wav
 ```
 

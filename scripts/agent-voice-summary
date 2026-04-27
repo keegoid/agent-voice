@@ -5,6 +5,8 @@ set -euo pipefail
 
 server_url="${AGENT_VOICE_SERVER:-${CODEX_TTS_SERVER:-http://127.0.0.1:8880}}"
 voice="${AGENT_VOICE_VOICE:-${CODEX_TTS_VOICE:-cyberpunk_cool}}"
+speech_timeout="${AGENT_VOICE_SPEECH_TIMEOUT_SECONDS:-${CODEX_TTS_SPEECH_TIMEOUT_SECONDS:-600}}"
+max_tokens="${AGENT_VOICE_TTS_MAX_TOKENS:-${CODEX_TTS_MAX_TOKENS:-}}"
 instruct=""
 output=""
 play=1
@@ -18,6 +20,7 @@ Usage:
 Options:
   -v, --voice NAME      Voice name. Default: cyberpunk_cool.
   -i, --instruct TEXT   Custom voice-design prompt; skips server voice lookup.
+  --max-tokens N        Per-request TTS token budget.
   -s, --server URL      TTS server URL. Default: http://127.0.0.1:8880.
   -o, --output PATH     Save WAV to PATH instead of a temp file.
   --no-play             Generate WAV but do not play it.
@@ -40,6 +43,11 @@ while [[ $# -gt 0 ]]; do
     -i|--instruct)
       [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
       instruct="$2"
+      shift 2
+      ;;
+    --max-tokens)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
+      max_tokens="$2"
       shift 2
       ;;
     -o|--output)
@@ -83,6 +91,14 @@ fi
 text="${text#"${text%%[![:space:]]*}"}"
 text="${text%"${text##*[![:space:]]}"}"
 [[ -n "$text" ]] || { echo "No summary text provided" >&2; exit 2; }
+if [[ -n "$max_tokens" && ! "$max_tokens" =~ ^[0-9]+$ ]]; then
+  echo "--max-tokens must be a positive integer" >&2
+  exit 2
+fi
+if ! [[ "$speech_timeout" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "Speech timeout must be a positive number of seconds" >&2
+  exit 2
+fi
 
 command -v curl >/dev/null || { echo "curl not found" >&2; exit 1; }
 command -v jq >/dev/null || { echo "jq not found" >&2; exit 1; }
@@ -122,12 +138,14 @@ payload="$(
     --arg input "$text" \
     --arg voice "$voice" \
     --arg instruct "$instruct" \
+    --argjson max_tokens "${max_tokens:-null}" \
     --arg response_format "wav" \
     '{model: $model, input: $input, voice: $voice, response_format: $response_format}
-      + (if $instruct == "" then {} else {instruct: $instruct} end)'
+      + (if $instruct == "" then {} else {instruct: $instruct} end)
+      + (if $max_tokens == null then {} else {max_tokens: $max_tokens} end)'
 )"
 
-curl -fsS --max-time 180 \
+curl -fsS --max-time "$speech_timeout" \
   -H 'Content-Type: application/json' \
   -d "$payload" \
   "$server_url/v1/audio/speech" \

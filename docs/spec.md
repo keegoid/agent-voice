@@ -28,9 +28,16 @@ default.
     - `response_format`, default `wav`
     - `language`, default `English`
     - `instruct`, optional custom voice-design prompt
+    - `max_tokens`, optional TTS generation budget
   - rejects unknown `voice` values with HTTP 400 unless `instruct` is
     provided.
   - rejects unsupported `response_format` values with HTTP 400.
+  - does not impose a request character cap. Long requests may be split into
+    multiple synthesis segments server-side and concatenated into one WAV.
+  - defaults to `AGENT_VOICE_TTS_MAX_TOKENS=24000` and retries suspiciously
+    short generated segments once by default.
+  - inserts `AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS=0.18` seconds of silence
+    between generated segments by default.
   - returns generated audio bytes with the correct audio media type.
   - returns HTTP 500 if the model generates no audio or if generation fails.
 - `POST /v1/audio/transcriptions`

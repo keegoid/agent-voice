@@ -58,6 +58,36 @@ def test_agent_voice_summary_calls_mock_server_and_writes_output(tmp_path: Path)
     assert request.get("model", "qwen3-tts") == "qwen3-tts"
 
 
+def test_agent_voice_summary_sends_max_tokens_when_requested(tmp_path: Path) -> None:
+    helper = require_executable("agent-voice-summary")
+
+    with MockSpeechServer() as server:
+        result = run_with_home(
+            [
+                str(helper),
+                "--server",
+                server.url,
+                "--max-tokens",
+                "32123",
+                "--no-play",
+                "hello from tests",
+            ],
+            tmp_path,
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert server.requests[0].body["max_tokens"] == 32123
+
+
+def test_agent_voice_summary_rejects_invalid_max_tokens(tmp_path: Path) -> None:
+    helper = require_executable("agent-voice-summary")
+
+    result = run_with_home([str(helper), "--max-tokens", "abc", "--no-play", "hello"], tmp_path)
+
+    assert result.returncode == 2
+    assert "--max-tokens" in result.stderr
+
+
 def test_agent_voice_summary_rejects_voice_not_advertised_by_server(tmp_path: Path) -> None:
     helper = require_executable("agent-voice-summary")
 
