@@ -22,7 +22,7 @@ _tts_model = None
 
 class RequestPayload(BaseModel):
     model: str = "qwen3-tts"
-    input: str = Field(min_length=1)
+    input: str = Field(min_length=1, max_length=4000)
     voice: str = "peng_mythic"
     response_format: str = "wav"
     language: str = "English"

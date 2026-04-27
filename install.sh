@@ -87,16 +87,16 @@ backup_path() {
   local target="$1"
   local rel
   local dest
+  local home_prefix="$HOME/"
   [[ -e "$target" ]] || return 0
   if [[ "$DRY_RUN" -eq 1 ]]; then
     would "backup $target"
     return 0
   fi
-  rel="${target#$HOME/}"
-  if [[ "$rel" == "$target" ]]; then
-    rel="external/${target#/}"
+  if [[ "$target" == "$home_prefix"* ]]; then
+    rel="home/${target#"$home_prefix"}"
   else
-    rel="home/$rel"
+    rel="external/${target#/}"
   fi
   dest="$backup_dir/$rel"
   mkdir -p "$(dirname "$dest")"
@@ -143,6 +143,10 @@ find_source_dir() {
         ;;
     esac
   done < <(tar -tzf "$archive")
+  if ! tar -tvf "$archive" | awk '$1 ~ /^l/ { found=1 } END { exit found ? 1 : 0 }'; then
+    echo "Archive symlinks are not supported" >&2
+    exit 1
+  fi
   tar -xzf "$archive" -C "$temp_root"
   printf '%s\n' "$temp_root/codex-tts-main"
 }
@@ -204,6 +208,8 @@ write_plist() {
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>ThrottleInterval</key>
+  <integer>20</integer>
   <key>StandardOutPath</key>
   <string>$LOG_DIR/server.log</string>
   <key>StandardErrorPath</key>

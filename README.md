@@ -14,21 +14,23 @@ helpers that make voice cues best-effort instead of task-breaking.
 Version 1 supports macOS Apple Silicon only.
 
 ```bash
-tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/codex-tts/main/install.sh -o "$tmp/install.sh" && bash "$tmp/install.sh" --allow-unpinned
+tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/codex-tts/main/install.sh -o "$tmp/install.sh" && git clone --depth 1 https://github.com/keegoid/codex-tts "$tmp/source" && bash "$tmp/install.sh" --source-dir "$tmp/source"
 ```
 
 The convenience command downloads a temporary installer first, then runs it; it
-does not pipe remote bytes directly into a shell. It does trust the rolling
-`main` archive over HTTPS. For an integrity-pinned install, clone or download a
+does not pipe remote bytes directly into a shell and does not use the
+installer's unpinned archive fallback. It still trusts GitHub over HTTPS and the
+repository default branch. For an integrity-pinned install, clone or download a
 pinned commit/tag, inspect it, then run `./install.sh --source-dir "$PWD"`.
-Remote archive installs can also pass `--archive-sha256 <sha256>` or
-`CODEX_TTS_ARCHIVE_SHA256`.
+Remote archive installs require `--archive-sha256 <sha256>` unless
+`--allow-unpinned` is passed explicitly.
 
 ## Requirements
 
 - macOS on Apple Silicon.
 - Python 3.12 or newer.
 - `uv`.
+- `git` for the convenience install command.
 - `curl`, `jq`, and `afplay` for the Codex speech helper.
 - Network access for the first install. The installer creates a local virtual
   environment and downloads the MLX runtime/model dependencies into app-managed
