@@ -17,13 +17,12 @@ Version 1 supports macOS Apple Silicon only.
 tmp="$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/keegoid/codex-tts/main/install.sh -o "$tmp/install.sh" && git clone --depth 1 https://github.com/keegoid/codex-tts "$tmp/source" && bash "$tmp/install.sh" --source-dir "$tmp/source"
 ```
 
-The convenience command downloads a temporary installer first, then runs it; it
-does not pipe remote bytes directly into a shell and does not use the
-installer's unpinned archive fallback. It still trusts GitHub over HTTPS and the
-repository default branch. For an integrity-pinned install, clone or download a
-pinned commit/tag, inspect it, then run `./install.sh --source-dir "$PWD"`.
-Remote archive installs require `--archive-sha256 <sha256>` unless
-`--allow-unpinned` is passed explicitly.
+The convenience command downloads a temporary installer first, then runs it. It
+does not use shell piping, but it still executes code from the current GitHub
+default branch and should be treated as an unpinned convenience path. For an
+integrity-pinned install, clone or download a pinned commit/tag, inspect it,
+then run `./install.sh --source-dir "$PWD"`. Remote archive installs require
+`--archive-sha256 <sha256>` unless `--allow-unpinned` is passed explicitly.
 
 ## Requirements
 

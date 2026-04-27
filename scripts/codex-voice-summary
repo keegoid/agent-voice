@@ -73,6 +73,10 @@ done
 if [[ $# -gt 0 ]]; then
   text="$*"
 else
+  if [[ -t 0 ]]; then
+    echo "No summary text provided" >&2
+    exit 2
+  fi
   text="$(cat)"
 fi
 

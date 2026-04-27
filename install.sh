@@ -62,6 +62,10 @@ say() {
   printf '%s\n' "$*"
 }
 
+warn() {
+  printf '%s\n' "$*" >&2
+}
+
 would() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     say "dry-run: $*"
@@ -118,12 +122,12 @@ find_source_dir() {
   temp_root="$(mktemp -d)"
   archive="$temp_root/codex-tts.tar.gz"
   if [[ -z "$ARCHIVE_SHA256" && "$ALLOW_UNPINNED" != "1" ]]; then
-    echo "Remote archive installs require --archive-sha256 unless --allow-unpinned is set." >&2
-    echo "For an auditable install, clone a pinned commit and run: ./install.sh --source-dir \"\$PWD\"" >&2
+    warn "Remote archive installs require --archive-sha256 unless --allow-unpinned is set."
+    warn "For an auditable install, clone a pinned commit and run: ./install.sh --source-dir \"\$PWD\""
     exit 1
   fi
   if [[ -z "$ARCHIVE_SHA256" ]]; then
-    say "Warning: installing from rolling main without an archive checksum"
+    warn "Warning: installing from rolling main without an archive checksum"
   fi
   curl -fsSL "$ARCHIVE_URL" -o "$archive"
   if [[ -n "$ARCHIVE_SHA256" ]]; then
@@ -137,13 +141,13 @@ find_source_dir() {
   fi
   while IFS= read -r member; do
     case "$member" in
-      /*|*../*)
+      /*|../*|*/../*|..|*/..)
         echo "Unsafe archive path: $member" >&2
         exit 1
         ;;
     esac
   done < <(tar -tzf "$archive")
-  if ! tar -tvf "$archive" | awk '$1 ~ /^l/ { found=1 } END { exit found ? 1 : 0 }'; then
+  if tar -tvf "$archive" | awk '$1 ~ /^l/ { found=1 } END { exit found ? 0 : 1 }'; then
     echo "Archive symlinks are not supported" >&2
     exit 1
   fi
