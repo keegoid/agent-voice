@@ -168,7 +168,11 @@ Public voices:
 
 ## Hermes Agent
 
-Configure Hermes Agent to use `agent-voice` for TTS:
+Hermes Agent can use `agent-voice` through its existing OpenAI-compatible TTS
+backend. No Hermes code patch is required; point Hermes at the local server and
+give it any non-empty audio API key.
+
+With `agent-voice` installed and running, configure the default Hermes home:
 
 ```bash
 agent-voice configure hermes --restart-gateway
@@ -180,8 +184,41 @@ Preview first:
 agent-voice configure hermes --dry-run
 ```
 
-See [docs/hermes.md](docs/hermes.md) for the exact config changes and manual
-setup steps.
+That command backs up the existing Hermes files, then writes this TTS config to
+`~/.hermes/config.yaml`:
+
+```yaml
+tts:
+  provider: openai
+  openai:
+    model: qwen3-tts
+    voice: cyberpunk_cool
+    base_url: http://127.0.0.1:8880/v1
+
+voice:
+  auto_tts: true
+```
+
+It also ensures `~/.hermes/.env` contains:
+
+```bash
+VOICE_TOOLS_OPENAI_KEY=agent-voice-local
+```
+
+The key is only a local bearer token placeholder; `agent-voice` does not require
+a real OpenAI key when bound to loopback. Hermes requests MP3 for normal output
+and Opus for Telegram-style voice messages, both of which `agent-voice`
+supports. MP3 and Opus require `ffmpeg` on `PATH`.
+
+Manual setup is the same edit: set the `tts` block above, set
+`VOICE_TOOLS_OPENAI_KEY`, then restart any running Hermes gateway:
+
+```bash
+hermes gateway restart
+```
+
+See [docs/hermes.md](docs/hermes.md) for restore options and extra flags such as
+`--hermes-home`, `--voice`, and `--auto-tts false`.
 
 ## Development
 

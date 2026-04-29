@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import os
+import threading
+import time
 import warnings
 from typing import Any
 
@@ -233,6 +236,56 @@ def test_generate_audio_uses_configured_tts_token_budget(monkeypatch: pytest.Mon
 
     assert audio.startswith(b"RIFF")
     assert seen["max_tokens"] == 32123
+
+
+def test_generate_audio_serializes_shared_tts_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    state = {"active": False, "overlap": False, "calls": 0}
+    guard = threading.Lock()
+    start = threading.Barrier(2)
+
+    class FakeResult:
+        audio = [0.0] * 2400
+        sample_rate = 24000
+        token_count = 100
+
+    class FakeModel:
+        def generate_voice_design(self, **_kwargs: Any) -> list[FakeResult]:
+            with guard:
+                if state["active"]:
+                    state["overlap"] = True
+                state["active"] = True
+                state["calls"] += 1
+            try:
+                time.sleep(0.05)
+                return [FakeResult()]
+            finally:
+                with guard:
+                    state["active"] = False
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+
+    def worker(text: str) -> bytes:
+        start.wait(timeout=2)
+        return server.generate_audio(
+            text=text,
+            instruct="clear voice",
+            language="English",
+            response_format="wav",
+            max_tokens=123,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(worker, "first serialized request"),
+            pool.submit(worker, "second serialized request"),
+        ]
+        results = [future.result(timeout=5) for future in futures]
+
+    assert all(result.startswith(b"RIFF") for result in results)
+    assert state["calls"] == 2
+    assert state["overlap"] is False
 
 
 def test_split_speech_text_bounds_single_long_word() -> None:

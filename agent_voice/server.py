@@ -53,6 +53,7 @@ app = FastAPI(title="agent-voice", version="0.2.1")
 _tts_model = None
 _stt_model = None
 _tts_model_lock = threading.Lock()
+_tts_generation_lock = threading.Lock()
 _stt_model_lock = threading.Lock()
 _dropped_stt_options_lock = threading.Lock()
 _logged_dropped_stt_options: set[tuple[str, ...]] = set()
@@ -198,36 +199,40 @@ def generate_audio(
 ) -> bytes:
     """Generate audio bytes for a validated speech request."""
     model = get_tts_model()
-    segments = _split_speech_text(text, TTS_MAX_SEGMENT_CHARS)
-    chunks: list[np.ndarray] = []
-    sample_rate = 24000
-    output_sample_rate: int | None = None
+    # The MLX/Qwen TTS runtime is process-global and has shown native crashes
+    # under concurrent generation. Serialize synthesis while keeping health and
+    # STT requests independent.
+    with _tts_generation_lock:
+        segments = _split_speech_text(text, TTS_MAX_SEGMENT_CHARS)
+        chunks: list[np.ndarray] = []
+        sample_rate = 24000
+        output_sample_rate: int | None = None
 
-    for index, segment in enumerate(segments):
-        audio, sample_rate = _generate_audio_segment(
-            model=model,
-            text=segment,
-            instruct=instruct,
-            language=language,
-            max_tokens=max_tokens,
-        )
-        if audio.size == 0:
-            continue
-        if output_sample_rate is None:
-            output_sample_rate = sample_rate
-        elif sample_rate != output_sample_rate:
-            raise RuntimeError(
-                f"TTS segments returned inconsistent sample rates: {output_sample_rate} and {sample_rate}"
+        for index, segment in enumerate(segments):
+            audio, sample_rate = _generate_audio_segment(
+                model=model,
+                text=segment,
+                instruct=instruct,
+                language=language,
+                max_tokens=max_tokens,
             )
-        if chunks and index > 0:
-            chunks.append(np.zeros(int(sample_rate * TTS_SEGMENT_SILENCE_SECONDS), dtype=audio.dtype))
-        chunks.append(audio)
+            if audio.size == 0:
+                continue
+            if output_sample_rate is None:
+                output_sample_rate = sample_rate
+            elif sample_rate != output_sample_rate:
+                raise RuntimeError(
+                    f"TTS segments returned inconsistent sample rates: {output_sample_rate} and {sample_rate}"
+                )
+            if chunks and index > 0:
+                chunks.append(np.zeros(int(sample_rate * TTS_SEGMENT_SILENCE_SECONDS), dtype=audio.dtype))
+            chunks.append(audio)
 
-    if not chunks:
-        return b""
+        if not chunks:
+            return b""
 
-    audio = np.concatenate(chunks)
-    return _encode_audio(audio, output_sample_rate or sample_rate, response_format)
+        audio = np.concatenate(chunks)
+        return _encode_audio(audio, output_sample_rate or sample_rate, response_format)
 
 
 def _normalize_tts_response_format(response_format: str) -> str:
