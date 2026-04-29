@@ -102,6 +102,82 @@ def test_speech_accepts_long_input_without_character_cap(monkeypatch: pytest.Mon
     assert response.status_code == 200
 
 
+def test_speech_accepts_hermes_mp3_response_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = locate_fastapi_app()
+    seen: dict[str, Any] = {}
+
+    def fake_generation(*_args: Any, **kwargs: Any) -> bytes:
+        seen.update(kwargs)
+        return b"ID3fake-mp3"
+
+    patch_generation(monkeypatch, app, fake_generation)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={"input": "hello", "voice": "cyberpunk_cool", "response_format": "mp3"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("audio/mpeg")
+    assert response.content == b"ID3fake-mp3"
+    assert seen["response_format"] == "mp3"
+
+
+def test_speech_accepts_hermes_opus_response_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = locate_fastapi_app()
+
+    def fake_generation(*_args: Any, **_kwargs: Any) -> bytes:
+        return b"OggSfake-opus"
+
+    patch_generation(monkeypatch, app, fake_generation)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={"input": "hello", "voice": "cyberpunk_cool", "response_format": "opus"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("audio/ogg")
+    assert response.content == b"OggSfake-opus"
+
+
+def test_generate_audio_transcodes_mp3_with_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    seen: dict[str, Any] = {}
+
+    class FakeResult:
+        audio = [0.0] * 2400
+        sample_rate = 24000
+        token_count = 100
+
+    class FakeModel:
+        def generate_voice_design(self, **kwargs: Any) -> list[FakeResult]:
+            seen.update(kwargs)
+            return [FakeResult()]
+
+    def fake_convert(wav_bytes: bytes, response_format: str) -> bytes:
+        assert wav_bytes.startswith(b"RIFF")
+        assert response_format == "mp3"
+        return b"ID3transcoded"
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+    monkeypatch.setattr(server, "_convert_wav_bytes", fake_convert)
+
+    audio = server.generate_audio(
+        text="short mp3 transcode test",
+        instruct="clear voice",
+        language="English",
+        response_format="mp3",
+        max_tokens=123,
+    )
+
+    assert audio == b"ID3transcoded"
+    assert seen["max_tokens"] == 123
+
+
 def test_generate_audio_uses_configured_tts_token_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     import agent_voice.server as server
 
@@ -144,7 +220,7 @@ def test_speech_rejects_unsupported_response_format() -> None:
 
     response = client.post(
         "/v1/audio/speech",
-        json={"input": "hello", "voice": "cyberpunk_cool", "response_format": "mp3"},
+        json={"input": "hello", "voice": "cyberpunk_cool", "response_format": "aac"},
     )
 
     assert response.status_code == 400

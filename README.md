@@ -38,6 +38,8 @@ require `--archive-sha256 <sha256>`.
 - `uv`.
 - `git` for the convenience install command.
 - `curl`, `jq`, and `afplay` for the shell speech helpers.
+- `ffmpeg` for OpenAI-compatible MP3 and Opus speech responses. WAV and FLAC
+  responses do not need transcoding.
 - Network access for the first install. The installer creates a local virtual
   environment and downloads the MLX runtime/model dependencies into app-managed
   state.
@@ -93,6 +95,7 @@ agent-voice start
 agent-voice stop
 agent-voice restart
 agent-voice logs
+agent-voice configure hermes
 agent-voice restore --list
 agent-voice restore
 agent-voice restore --backup <id>
@@ -124,6 +127,16 @@ curl -fsS http://127.0.0.1:8880/v1/audio/speech \
   -o speech.wav
 ```
 
+OpenAI-compatible speech `response_format` values:
+
+- `wav`
+- `mp3`
+- `opus`
+- `ogg`
+- `flac`
+
+MP3 and Opus/OGG responses require `ffmpeg` on `PATH`.
+
 Transcription:
 
 ```bash
@@ -153,6 +166,23 @@ Public voices:
 - `anime_whisper`
 - `warm_wisdom`
 - `sultry_commanding`
+
+## Hermes Agent
+
+Configure Hermes Agent to use `agent-voice` for TTS:
+
+```bash
+agent-voice configure hermes --restart-gateway
+```
+
+Preview first:
+
+```bash
+agent-voice configure hermes --dry-run
+```
+
+See [docs/hermes.md](docs/hermes.md) for the exact config changes and manual
+setup steps.
 
 ## Development
 

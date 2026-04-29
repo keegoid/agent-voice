@@ -7,6 +7,8 @@ import inspect
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -34,6 +36,13 @@ TTS_REQUEST_MAX_TOKENS_LIMIT = 100000
 MAX_STT_UPLOAD_BYTES = int(os.getenv("AGENT_VOICE_MAX_STT_UPLOAD_BYTES") or str(25 * 1024 * 1024))
 ALLOWED_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"}
 SAFE_STT_GENERATION_OPTIONS = {"language", "verbose", "max_tokens", "chunk_duration", "initial_prompt"}
+TTS_RESPONSE_FORMATS = {
+    "wav": {"container": "wav", "media_type": "audio/wav"},
+    "mp3": {"container": "mp3", "media_type": "audio/mpeg"},
+    "opus": {"container": "ogg", "media_type": "audio/ogg"},
+    "ogg": {"container": "ogg", "media_type": "audio/ogg"},
+    "flac": {"container": "flac", "media_type": "audio/flac"},
+}
 
 app = FastAPI(title="agent-voice", version="0.2.1")
 _tts_model = None
@@ -167,9 +176,69 @@ def generate_audio(
         return b""
 
     audio = np.concatenate(chunks)
+    return _encode_audio(audio, output_sample_rate or sample_rate, response_format)
+
+
+def _normalize_tts_response_format(response_format: str) -> str:
+    normalized = response_format.strip().lower()
+    if normalized not in TTS_RESPONSE_FORMATS:
+        supported = ", ".join(sorted(TTS_RESPONSE_FORMATS))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported response_format; supported values: {supported}",
+        )
+    return normalized
+
+
+def _encode_audio(audio: np.ndarray, sample_rate: int, response_format: str) -> bytes:
+    normalized = _normalize_tts_response_format(response_format)
+    if normalized in {"wav", "flac"}:
+        output = io.BytesIO()
+        sf.write(output, audio, sample_rate, format=normalized.upper())
+        return output.getvalue()
+
     output = io.BytesIO()
-    sf.write(output, audio, output_sample_rate or sample_rate, format=response_format.upper())
-    return output.getvalue()
+    sf.write(output, audio, sample_rate, format="WAV")
+    return _convert_wav_bytes(output.getvalue(), normalized)
+
+
+def _convert_wav_bytes(wav_bytes: bytes, response_format: str) -> bytes:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError(f"ffmpeg is required for response_format={response_format}")
+
+    if response_format == "mp3":
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0", "-f", "mp3", "pipe:1"]
+    elif response_format in {"opus", "ogg"}:
+        cmd = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "wav",
+            "-i",
+            "pipe:0",
+            "-acodec",
+            "libopus",
+            "-ac",
+            "1",
+            "-b:a",
+            "64k",
+            "-vbr",
+            "off",
+            "-f",
+            "ogg",
+            "pipe:1",
+        ]
+    else:  # pragma: no cover - protected by _normalize_tts_response_format
+        raise RuntimeError(f"Unsupported response_format={response_format}")
+
+    result = subprocess.run(cmd, input=wav_bytes, capture_output=True, timeout=60)
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"ffmpeg failed for response_format={response_format}: {stderr}")
+    return result.stdout
 
 
 def _generate_audio_segment(
@@ -418,8 +487,7 @@ def audio_speech(request: RequestPayload) -> Response:
     if request.model not in {"qwen3-tts", TTS_MODEL_ID}:
         raise HTTPException(status_code=400, detail="Unsupported model")
 
-    if request.response_format != "wav":
-        raise HTTPException(status_code=400, detail="Unsupported response_format; only wav is supported")
+    response_format = _normalize_tts_response_format(request.response_format)
 
     text = request.input.strip()
     if not text:
@@ -442,7 +510,7 @@ def audio_speech(request: RequestPayload) -> Response:
             text=text,
             instruct=voice_design,
             language=request.language,
-            response_format=request.response_format,
+            response_format=response_format,
             max_tokens=request.max_tokens or TTS_MAX_TOKENS,
         )
     except HTTPException:
@@ -456,7 +524,7 @@ def audio_speech(request: RequestPayload) -> Response:
     elapsed = time.perf_counter() - started
     return Response(
         content=audio,
-        media_type="audio/wav",
+        media_type=TTS_RESPONSE_FORMATS[response_format]["media_type"],
         headers={"X-Generation-Time": f"{elapsed:.3f}"},
     )
 

@@ -31,9 +31,12 @@ default.
     - `max_tokens`, optional TTS generation budget
   - rejects unknown `voice` values with HTTP 400 unless `instruct` is
     provided.
-  - rejects unsupported `response_format` values with HTTP 400.
+  - supports `response_format` values `wav`, `mp3`, `opus`, `ogg`, and `flac`.
+    MP3 and Opus/OGG output require `ffmpeg`; WAV and FLAC do not.
+  - rejects other `response_format` values with HTTP 400.
   - does not impose a request character cap. Long requests may be split into
-    multiple synthesis segments server-side and concatenated into one WAV.
+    multiple synthesis segments server-side and concatenated into one response
+    audio file.
   - defaults to `AGENT_VOICE_TTS_MAX_TOKENS=24000` and retries suspiciously
     short generated segments once by default.
   - inserts `AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS=0.18` seconds of silence
@@ -124,11 +127,26 @@ The installed `agent-voice` command supports:
 - `agent-voice stop`
 - `agent-voice restart`
 - `agent-voice logs`
+- `agent-voice configure hermes`
 - `agent-voice restore`
 - `agent-voice restore --list`
 - `agent-voice restore --backup <id>`
 - `agent-voice uninstall`
 - `agent-voice uninstall --destroy-caches`
+
+Hermes configuration behavior:
+
+- `agent-voice configure hermes` updates `~/.hermes/config.yaml` so Hermes uses
+  the local OpenAI-compatible speech endpoint:
+  - `tts.provider: openai`
+  - `tts.openai.model: qwen3-tts`
+  - `tts.openai.voice: cyberpunk_cool` unless overridden.
+  - `tts.openai.base_url: http://127.0.0.1:8880/v1` unless overridden.
+  - `voice.auto_tts: true` by default.
+- It writes `VOICE_TOOLS_OPENAI_KEY=agent-voice-local` to `~/.hermes/.env`.
+- It backs up existing Hermes config files before editing.
+- `--dry-run` prints intended changes without modifying files.
+- `--restart-gateway` restarts the Hermes gateway after successful writes.
 
 Restore behavior:
 
