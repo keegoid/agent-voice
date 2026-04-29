@@ -135,7 +135,8 @@ OpenAI-compatible speech `response_format` values:
 - `ogg`
 - `flac`
 
-MP3 and Opus/OGG responses require `ffmpeg` on `PATH`.
+MP3 and Opus/OGG responses require `ffmpeg` on `PATH`. `ogg` is an alias for
+Opus-in-Ogg, not Vorbis.
 
 Transcription:
 

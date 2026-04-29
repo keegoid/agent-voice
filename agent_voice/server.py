@@ -53,6 +53,10 @@ _dropped_stt_options_lock = threading.Lock()
 _logged_dropped_stt_options: set[tuple[str, ...]] = set()
 
 
+class AudioFormatError(RuntimeError):
+    """Raised when requested response audio encoding cannot be produced."""
+
+
 class RequestPayload(BaseModel):
     model: str = "qwen3-tts"
     input: str = Field(min_length=1)
@@ -205,7 +209,7 @@ def _encode_audio(audio: np.ndarray, sample_rate: int, response_format: str) -> 
 def _convert_wav_bytes(wav_bytes: bytes, response_format: str) -> bytes:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
-        raise RuntimeError(f"ffmpeg is required for response_format={response_format}")
+        raise AudioFormatError(f"ffmpeg is required for response_format={response_format}")
 
     if response_format == "mp3":
         cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0", "-f", "mp3", "pipe:1"]
@@ -237,7 +241,7 @@ def _convert_wav_bytes(wav_bytes: bytes, response_format: str) -> bytes:
     result = subprocess.run(cmd, input=wav_bytes, capture_output=True, timeout=60)
     if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"ffmpeg failed for response_format={response_format}: {stderr}")
+        raise AudioFormatError(f"ffmpeg failed for response_format={response_format}: {stderr}")
     return result.stdout
 
 
@@ -513,6 +517,8 @@ def audio_speech(request: RequestPayload) -> Response:
             response_format=response_format,
             max_tokens=request.max_tokens or TTS_MAX_TOKENS,
         )
+    except AudioFormatError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:

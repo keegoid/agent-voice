@@ -24,6 +24,9 @@ The command backs up existing Hermes files under
 - `~/.hermes/.env`
   - `VOICE_TOOLS_OPENAI_KEY=agent-voice-local`
 
+If `VOICE_TOOLS_OPENAI_KEY` already has a non-empty value, the helper leaves it
+unchanged. The local server only requires that some bearer token is present.
+
 Preview without writing:
 
 ```bash
@@ -35,6 +38,14 @@ Use a different preset voice:
 ```bash
 agent-voice configure hermes --voice warm_wisdom --restart-gateway
 ```
+
+Keep Hermes auto-TTS off while still configuring the local voice backend:
+
+```bash
+agent-voice configure hermes --auto-tts false --restart-gateway
+```
+
+`--hermes-home` must point inside `$HOME` unless `--allow-outside-home` is set.
 
 ## Manual Configuration
 
@@ -67,8 +78,8 @@ hermes gateway restart
 
 - Hermes usually requests MP3 for Discord and desktop output. `agent-voice`
   supports `response_format: mp3` directly.
-- Telegram-style Opus output is supported with `response_format: opus` or
-  `response_format: ogg`.
+- Telegram-style Opus output is supported with `response_format: opus`.
+  `response_format: ogg` is an alias for Opus-in-Ogg, not Vorbis.
 - MP3 and Opus output require `ffmpeg` on `PATH`. WAV and FLAC do not.
 - `voice.auto_tts: true` makes Hermes speak replies to voice-message flows. For
   voice attachments on every text reply in a specific messaging channel, run

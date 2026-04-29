@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import shutil
 import subprocess
 import sys
 import time
+from collections.abc import MutableMapping
 from pathlib import Path
+
+from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
 
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8880/v1"
@@ -52,9 +57,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run 'hermes gateway restart' after writing config.",
     )
+    parser.add_argument(
+        "--allow-outside-home",
+        action="store_true",
+        help="Allow --hermes-home outside the current HOME.",
+    )
     args = parser.parse_args(argv)
 
     hermes_home = Path(args.hermes_home).expanduser()
+    if not args.allow_outside_home and not _is_within_home(hermes_home):
+        print(
+            f"Refusing to edit Hermes home outside HOME without --allow-outside-home: {hermes_home}",
+            file=sys.stderr,
+        )
+        return 2
     config_path = hermes_home / "config.yaml"
     env_path = hermes_home / ".env"
     agent_voice_home = Path(os.environ.get("AGENT_VOICE_HOME") or Path.home() / ".agent-voice")
@@ -81,13 +97,17 @@ def main(argv: list[str] | None = None) -> int:
     backup_file(config_path, backup_root)
     backup_file(env_path, backup_root)
 
-    config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-    config_text = configure_yaml(
-        config_text,
-        server_url=args.server.rstrip("/"),
-        voice=args.voice,
-        auto_tts=args.auto_tts,
-    )
+    try:
+        config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        config_text = configure_yaml(
+            config_text,
+            server_url=args.server.rstrip("/"),
+            voice=args.voice,
+            auto_tts=args.auto_tts,
+        )
+    except Exception as exc:
+        print(f"Failed to update {config_path}: {exc}", file=sys.stderr)
+        return 1
     config_path.write_text(config_text, encoding="utf-8")
 
     env_text = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
@@ -121,16 +141,26 @@ def backup_file(path: Path, backup_root: Path) -> None:
 
 
 def configure_yaml(text: str, *, server_url: str, voice: str, auto_tts: str) -> str:
-    lines = text.splitlines()
-    if not lines:
-        lines = []
+    yaml = _yaml()
+    data = yaml.load(text) if text.strip() else CommentedMap()
+    if data is None:
+        data = CommentedMap()
+    if not isinstance(data, MutableMapping):
+        raise ValueError("config.yaml root must be a YAML mapping")
 
-    lines = set_top_child(lines, "tts", "provider", "openai")
-    lines = set_nested_child(lines, "tts", "openai", "model", quote_yaml("qwen3-tts"))
-    lines = set_nested_child(lines, "tts", "openai", "voice", quote_yaml(voice))
-    lines = set_nested_child(lines, "tts", "openai", "base_url", quote_yaml(server_url))
-    lines = set_top_child(lines, "voice", "auto_tts", auto_tts)
-    return "\n".join(lines).rstrip() + "\n"
+    tts = _ensure_mapping(data, "tts")
+    tts["provider"] = "openai"
+    openai = _ensure_mapping(tts, "openai")
+    openai["model"] = "qwen3-tts"
+    openai["voice"] = voice
+    openai["base_url"] = server_url
+
+    voice_config = _ensure_mapping(data, "voice")
+    voice_config["auto_tts"] = auto_tts == "true"
+
+    output = io.StringIO()
+    yaml.dump(data, output)
+    return output.getvalue()
 
 
 def configure_env(text: str) -> str:
@@ -138,7 +168,9 @@ def configure_env(text: str) -> str:
     replacement = f"VOICE_TOOLS_OPENAI_KEY={LOCAL_AUDIO_KEY}"
     for index, line in enumerate(lines):
         if line.startswith("VOICE_TOOLS_OPENAI_KEY="):
-            lines[index] = replacement
+            _, _, value = line.partition("=")
+            if not value.strip():
+                lines[index] = replacement
             return "\n".join(lines).rstrip() + "\n"
     if lines and lines[-1].strip():
         lines.append("")
@@ -147,88 +179,29 @@ def configure_env(text: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def quote_yaml(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
+def _yaml() -> YAML:
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    yaml.allow_duplicate_keys = False
+    yaml.default_flow_style = False
+    return yaml
 
 
-def set_top_child(lines: list[str], block_key: str, child_key: str, value: str) -> list[str]:
-    start, end = ensure_top_block(lines, block_key)
-    target_prefix = f"  {child_key}:"
-    replacement = f"  {child_key}: {value}"
-    for index in range(start + 1, end):
-        if lines[index].startswith(target_prefix):
-            lines[index] = replacement
-            return lines
-    lines.insert(start + 1, replacement)
-    return lines
+def _ensure_mapping(parent: MutableMapping, key: str) -> CommentedMap:
+    value = parent.get(key)
+    if isinstance(value, MutableMapping):
+        return value
+    replacement = CommentedMap()
+    parent[key] = replacement
+    return replacement
 
 
-def set_nested_child(
-    lines: list[str],
-    block_key: str,
-    nested_key: str,
-    child_key: str,
-    value: str,
-) -> list[str]:
-    nested_start = ensure_nested_block(lines, block_key, nested_key)
-    nested_end = nested_block_end(lines, nested_start)
-    target_prefix = f"    {child_key}:"
-    replacement = f"    {child_key}: {value}"
-    for index in range(nested_start + 1, nested_end):
-        if lines[index].startswith(target_prefix):
-            lines[index] = replacement
-            return lines
-    lines.insert(nested_end, replacement)
-    return lines
-
-
-def ensure_top_block(lines: list[str], block_key: str) -> tuple[int, int]:
-    found = find_top_block(lines, block_key)
-    if found:
-        return found
-    if lines and lines[-1].strip():
-        lines.append("")
-    start = len(lines)
-    lines.append(f"{block_key}:")
-    return start, len(lines)
-
-
-def ensure_nested_block(lines: list[str], block_key: str, nested_key: str) -> int:
-    start, end = ensure_top_block(lines, block_key)
-    target_prefix = f"  {nested_key}:"
-    for index in range(start + 1, end):
-        if lines[index].startswith(target_prefix):
-            lines[index] = f"  {nested_key}:"
-            return index
-    lines.insert(end, f"  {nested_key}:")
-    return end
-
-
-def find_top_block(lines: list[str], block_key: str) -> tuple[int, int] | None:
-    prefix = f"{block_key}:"
-    for index, line in enumerate(lines):
-        if line == prefix or line.startswith(f"{prefix} "):
-            return index, top_block_end(lines, index)
-    return None
-
-
-def top_block_end(lines: list[str], start: int) -> int:
-    for index in range(start + 1, len(lines)):
-        line = lines[index]
-        if line and not line.startswith((" ", "#")):
-            return index
-    return len(lines)
-
-
-def nested_block_end(lines: list[str], start: int) -> int:
-    for index in range(start + 1, len(lines)):
-        line = lines[index]
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        if indent <= 2:
-            return index
-    return len(lines)
+def _is_within_home(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(Path.home().resolve())
+        return True
+    except ValueError:
+        return False
 
 
 if __name__ == "__main__":

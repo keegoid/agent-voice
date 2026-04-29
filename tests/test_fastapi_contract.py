@@ -178,6 +178,31 @@ def test_generate_audio_transcodes_mp3_with_ffmpeg(monkeypatch: pytest.MonkeyPat
     assert seen["max_tokens"] == 123
 
 
+def test_speech_returns_503_when_ffmpeg_is_missing_for_mp3(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    class FakeResult:
+        audio = [0.0] * 2400
+        sample_rate = 24000
+        token_count = 100
+
+    class FakeModel:
+        def generate_voice_design(self, **_kwargs: Any) -> list[FakeResult]:
+            return [FakeResult()]
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+    monkeypatch.setattr(server.shutil, "which", lambda _name: None)
+    client = TestClient(locate_fastapi_app())
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={"input": "hello", "voice": "cyberpunk_cool", "response_format": "mp3"},
+    )
+
+    assert response.status_code == 503
+    assert "ffmpeg is required" in response.text
+
+
 def test_generate_audio_uses_configured_tts_token_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     import agent_voice.server as server
 

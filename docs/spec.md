@@ -32,7 +32,8 @@ default.
   - rejects unknown `voice` values with HTTP 400 unless `instruct` is
     provided.
   - supports `response_format` values `wav`, `mp3`, `opus`, `ogg`, and `flac`.
-    MP3 and Opus/OGG output require `ffmpeg`; WAV and FLAC do not.
+    MP3 and Opus/OGG output require `ffmpeg`; WAV and FLAC do not. `ogg` is
+    an alias for Opus-in-Ogg.
   - rejects other `response_format` values with HTTP 400.
   - does not impose a request character cap. Long requests may be split into
     multiple synthesis segments server-side and concatenated into one response
@@ -143,10 +144,13 @@ Hermes configuration behavior:
   - `tts.openai.voice: cyberpunk_cool` unless overridden.
   - `tts.openai.base_url: http://127.0.0.1:8880/v1` unless overridden.
   - `voice.auto_tts: true` by default.
-- It writes `VOICE_TOOLS_OPENAI_KEY=agent-voice-local` to `~/.hermes/.env`.
+- It writes `VOICE_TOOLS_OPENAI_KEY=agent-voice-local` to `~/.hermes/.env`
+  when that key is missing or empty. Existing non-empty values are preserved.
 - It backs up existing Hermes config files before editing.
 - `--dry-run` prints intended changes without modifying files.
 - `--restart-gateway` restarts the Hermes gateway after successful writes.
+- `--hermes-home` must point inside `$HOME` unless `--allow-outside-home` is
+  set.
 
 Restore behavior:
 
