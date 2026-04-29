@@ -17,7 +17,7 @@ VOICE_DESIGNS: dict[str, str] = {
         "raises her voice because she never needs to; her control is the threat."
     ),
     "cyberpunk_cool": (
-        "A young woman's voice with a gritty rasp and a world-weary edge. "
+        "A young woman's voice with a mid-pitched world-weary edge. "
         "She speaks like a rogue netrunner jacked into the grid: clipped, precise, "
         "and dripping with street-smart disdain. Flat affect punctuated by sharp "
         "emphasis on key words. Neon-lit back-alley energy."
