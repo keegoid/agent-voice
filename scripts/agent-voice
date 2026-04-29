@@ -48,6 +48,7 @@ Commands:
   stop
   restart
   logs
+  configure hermes [--dry-run] [--restart-gateway] [--server URL] [--voice NAME]
   restore [--list|--backup <id>]
   uninstall [--destroy-caches]
 USAGE
@@ -164,6 +165,21 @@ restore_backup() {
   echo "Restored backup $(basename "$backup")"
 }
 
+run_python_module() {
+  module="$1"
+  shift
+  python="$STATE_DIR/app/.venv/bin/python"
+  if [[ ! -x "$python" ]]; then
+    python="$(command -v python3 2>/dev/null || true)"
+  fi
+  [[ -n "$python" ]] || { echo "python3 not found" >&2; exit 1; }
+  if [[ -d "$STATE_DIR/app" ]]; then
+    PYTHONPATH="$STATE_DIR/app:${PYTHONPATH:-}" "$python" -m "$module" "$@"
+  else
+    "$python" -m "$module" "$@"
+  fi
+}
+
 cmd="${1:-}"
 case "$cmd" in
   status)
@@ -185,6 +201,24 @@ case "$cmd" in
     ;;
   logs)
     tail -n 120 -f "$STATE_DIR/logs/server.log" "$STATE_DIR/logs/server.err.log"
+    ;;
+  configure)
+    shift
+    subcommand="${1:-}"
+    case "$subcommand" in
+      hermes)
+        shift
+        run_python_module "agent_voice.hermes_config" "$@"
+        ;;
+      ""|-h|--help|help)
+        echo "Usage: agent-voice configure hermes [options]"
+        ;;
+      *)
+        echo "Unknown configure target: $subcommand" >&2
+        echo "Usage: agent-voice configure hermes [options]" >&2
+        exit 2
+        ;;
+    esac
     ;;
   restore)
     shift
