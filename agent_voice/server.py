@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import inspect
 import json
+import logging
 import os
 import re
 import shutil
@@ -13,6 +14,8 @@ import sys
 import tempfile
 import threading
 import time
+import warnings
+from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
@@ -27,6 +30,8 @@ from .voices import VOICE_DESIGNS
 
 TTS_MODEL_ID = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
 STT_MODEL_ID = "mlx-community/whisper-large-v3-mlx"
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 STT_PROCESSOR_ID = os.getenv("AGENT_VOICE_STT_PROCESSOR_ID", "openai/whisper-large-v3")
 TTS_MAX_TOKENS = int(os.getenv("AGENT_VOICE_TTS_MAX_TOKENS") or "24000")
 TTS_GENERATION_ATTEMPTS = int(os.getenv("AGENT_VOICE_TTS_GENERATION_ATTEMPTS") or "2")
@@ -51,10 +56,42 @@ _tts_model_lock = threading.Lock()
 _stt_model_lock = threading.Lock()
 _dropped_stt_options_lock = threading.Lock()
 _logged_dropped_stt_options: set[tuple[str, ...]] = set()
+_QWEN_TRANSFORMERS_CONFIG_WARNING = (
+    "You are using a model of type `qwen3_tts` to instantiate a model of type ``."
+)
+_MLX_WHISPER_PROCESSOR_WARNING = r"Could not load WhisperProcessor: .*"
 
 
 class AudioFormatError(RuntimeError):
     """Raised when requested response audio encoding cannot be produced."""
+
+
+class _MessagePrefixFilter(logging.Filter):
+    def __init__(self, prefix: str) -> None:
+        super().__init__()
+        self.prefix = prefix
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not record.getMessage().startswith(self.prefix)
+
+
+@contextmanager
+def _suppress_known_loader_noise():
+    """Hide expected third-party loader warnings that agent-voice handles."""
+    transformers_logger = logging.getLogger("transformers.configuration_utils")
+    transformers_filter = _MessagePrefixFilter(_QWEN_TRANSFORMERS_CONFIG_WARNING)
+    transformers_logger.addFilter(transformers_filter)
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=_MLX_WHISPER_PROCESSOR_WARNING,
+                category=UserWarning,
+                module=r"mlx_audio\.stt\.models\.whisper\.whisper",
+            )
+            yield
+    finally:
+        transformers_logger.removeFilter(transformers_filter)
 
 
 class RequestPayload(BaseModel):
@@ -91,7 +128,8 @@ def _load_tts_model():
 
     started = time.perf_counter()
     print(f"Loading TTS model {TTS_MODEL_ID}...")
-    model = mlx_load_model(TTS_MODEL_ID)
+    with _suppress_known_loader_noise():
+        model = mlx_load_model(TTS_MODEL_ID)
     print(f"TTS model loaded in {time.perf_counter() - started:.1f}s")
     return model
 
@@ -120,7 +158,8 @@ def _load_stt_model():
 
     started = time.perf_counter()
     print(f"Loading STT model {STT_MODEL_ID}...")
-    model = mlx_stt_load_model(STT_MODEL_ID)
+    with _suppress_known_loader_noise():
+        model = mlx_stt_load_model(STT_MODEL_ID)
     _ensure_stt_processor(model)
     print(f"STT model loaded in {time.perf_counter() - started:.1f}s")
     return model
@@ -137,9 +176,17 @@ def _ensure_stt_processor(model: Any) -> None:
             "Transformers WhisperProcessor is not installed; run the installer or install the mlx extra"
         ) from exc
     try:
-        model._processor = WhisperProcessor.from_pretrained(STT_PROCESSOR_ID)
+        model._processor = _load_stt_processor(WhisperProcessor)
     except Exception as exc:  # pragma: no cover - depends on network/cache state
         raise RuntimeError(f"Failed to load Whisper processor {STT_PROCESSOR_ID}") from exc
+
+
+def _load_stt_processor(processor_class: Any) -> Any:
+    """Prefer cached processor metadata; fall back to Hub download for first use."""
+    try:
+        return processor_class.from_pretrained(STT_PROCESSOR_ID, local_files_only=True)
+    except Exception:
+        return processor_class.from_pretrained(STT_PROCESSOR_ID)
 
 
 def generate_audio(
@@ -540,7 +587,7 @@ async def audio_transcriptions(
     file: UploadFile = File(...),
     model: str = Form(STT_MODEL_ID),
     language: str | None = Form(None),
-    verbose: bool = Form(False),
+    verbose: bool | None = Form(None),
     max_tokens: int = Form(1024),
     chunk_duration: float = Form(30.0),
     frame_threshold: int | None = Form(None, include_in_schema=False),
@@ -570,7 +617,7 @@ async def audio_transcriptions(
             key: value
             for key, value in {
                 "language": language,
-                "verbose": verbose,
+                "verbose": True if verbose else None,
                 "max_tokens": max_tokens,
                 "chunk_duration": chunk_duration,
                 "frame_threshold": frame_threshold,

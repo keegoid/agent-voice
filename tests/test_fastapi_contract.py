@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+import warnings
 from typing import Any
 
 import pytest
@@ -297,8 +300,9 @@ def test_stt_loader_attaches_fallback_whisper_processor(monkeypatch: pytest.Monk
 
     class FakeProcessor:
         @staticmethod
-        def from_pretrained(model_id: str) -> str:
+        def from_pretrained(model_id: str, **kwargs: Any) -> str:
             assert model_id == server.STT_PROCESSOR_ID
+            assert kwargs == {"local_files_only": True}
             return "processor"
 
     fake_mlx_audio = types.ModuleType("mlx_audio")
@@ -318,6 +322,38 @@ def test_stt_loader_attaches_fallback_whisper_processor(monkeypatch: pytest.Monk
     model = server._load_stt_model()
 
     assert model._processor == "processor"
+
+
+def test_known_loader_noise_is_suppressed(caplog: pytest.LogCaptureFixture) -> None:
+    import agent_voice.server as server
+
+    transformers_logger = logging.getLogger("transformers.configuration_utils")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with caplog.at_level(logging.WARNING, logger="transformers.configuration_utils"):
+            with server._suppress_known_loader_noise():
+                transformers_logger.warning(server._QWEN_TRANSFORMERS_CONFIG_WARNING + " Extra context.")
+                transformers_logger.warning("unrelated transformers warning")
+                warnings.warn_explicit(
+                    "Could not load WhisperProcessor: missing preprocessor_config.json.",
+                    UserWarning,
+                    filename="whisper.py",
+                    lineno=1,
+                    module="mlx_audio.stt.models.whisper.whisper",
+                )
+                warnings.warn("unrelated user warning", UserWarning)
+
+    assert server._QWEN_TRANSFORMERS_CONFIG_WARNING not in caplog.text
+    assert "unrelated transformers warning" in caplog.text
+    assert [str(warning.message) for warning in caught] == ["unrelated user warning"]
+
+
+def test_huggingface_loader_noise_defaults_are_quiet() -> None:
+    import agent_voice.server  # noqa: F401
+
+    assert os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"
+    assert os.environ["HF_HUB_DISABLE_XET"] == "1"
 
 
 def test_stt_filter_drops_unsafe_decode_options_with_var_kwargs() -> None:
@@ -378,6 +414,7 @@ def test_transcription_returns_buffered_ndjson_from_mock_model(monkeypatch: pyte
             assert path.endswith(".wav")
             assert language == "en"
             assert initial_prompt == "legacy context"
+            assert "verbose" not in kwargs
             assert "frame_threshold" not in kwargs
             assert "prefill_step_size" not in kwargs
             return [{"text": "hello fig", "language": language}, FakeChunk()]
