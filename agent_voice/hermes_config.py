@@ -17,6 +17,7 @@ from ruamel.yaml.comments import CommentedMap
 
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8880/v1"
+DEFAULT_MODEL = "qwen3-tts"
 DEFAULT_VOICE = "cyberpunk_cool"
 LOCAL_AUDIO_KEY = "agent-voice-local"
 
@@ -42,6 +43,11 @@ def main(argv: list[str] | None = None) -> int:
         help=f"agent-voice preset voice. Default: {DEFAULT_VOICE}.",
     )
     parser.add_argument(
+        "--model",
+        default=os.environ.get("AGENT_VOICE_MODEL") or DEFAULT_MODEL,
+        help=f"Hermes TTS model name. Default: {DEFAULT_MODEL}.",
+    )
+    parser.add_argument(
         "--auto-tts",
         choices=("true", "false"),
         default="true",
@@ -56,6 +62,12 @@ def main(argv: list[str] | None = None) -> int:
         "--restart-gateway",
         action="store_true",
         help="Run 'hermes gateway restart' after writing config.",
+    )
+    parser.add_argument(
+        "--restart-timeout-seconds",
+        type=float,
+        default=60.0,
+        help="Timeout for 'hermes gateway restart'. Default: 60.",
     )
     parser.add_argument(
         "--allow-outside-home",
@@ -78,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
 
     planned = [
         f"{config_path}: tts.provider=openai",
-        f"{config_path}: tts.openai.model=qwen3-tts",
+        f"{config_path}: tts.openai.model={args.model}",
         f"{config_path}: tts.openai.voice={args.voice}",
         f"{config_path}: tts.openai.base_url={args.server.rstrip('/')}",
         f"{config_path}: voice.auto_tts={args.auto_tts}",
@@ -102,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         config_text = configure_yaml(
             config_text,
             server_url=args.server.rstrip("/"),
+            model=args.model,
             voice=args.voice,
             auto_tts=args.auto_tts,
         )
@@ -119,7 +132,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Backup: {backup_root}")
 
     if args.restart_gateway:
-        restart = subprocess.run(["hermes", "gateway", "restart"], text=True)
+        try:
+            restart = subprocess.run(
+                ["hermes", "gateway", "restart"],
+                text=True,
+                timeout=args.restart_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            print("hermes gateway restart timed out", file=sys.stderr)
+            return 1
         if restart.returncode != 0:
             print("hermes gateway restart failed", file=sys.stderr)
             return restart.returncode
@@ -140,7 +161,7 @@ def backup_file(path: Path, backup_root: Path) -> None:
     shutil.copy2(path, destination)
 
 
-def configure_yaml(text: str, *, server_url: str, voice: str, auto_tts: str) -> str:
+def configure_yaml(text: str, *, server_url: str, model: str, voice: str, auto_tts: str) -> str:
     yaml = _yaml()
     data = yaml.load(text) if text.strip() else CommentedMap()
     if data is None:
@@ -151,7 +172,7 @@ def configure_yaml(text: str, *, server_url: str, voice: str, auto_tts: str) -> 
     tts = _ensure_mapping(data, "tts")
     tts["provider"] = "openai"
     openai = _ensure_mapping(tts, "openai")
-    openai["model"] = "qwen3-tts"
+    openai["model"] = model
     openai["voice"] = voice
     openai["base_url"] = server_url
 
@@ -166,17 +187,32 @@ def configure_yaml(text: str, *, server_url: str, voice: str, auto_tts: str) -> 
 def configure_env(text: str) -> str:
     lines = text.splitlines()
     replacement = f"VOICE_TOOLS_OPENAI_KEY={LOCAL_AUDIO_KEY}"
-    for index, line in enumerate(lines):
+    selected_line = ""
+    for line in lines:
         if line.startswith("VOICE_TOOLS_OPENAI_KEY="):
             _, _, value = line.partition("=")
-            if not value.strip():
-                lines[index] = replacement
-            return "\n".join(lines).rstrip() + "\n"
-    if lines and lines[-1].strip():
-        lines.append("")
-    lines.append("# Local OpenAI-compatible audio key used by agent-voice.")
-    lines.append(replacement)
-    return "\n".join(lines).rstrip() + "\n"
+            if value.strip():
+                selected_line = line
+                break
+    if not selected_line:
+        selected_line = replacement
+
+    output: list[str] = []
+    inserted = False
+    for line in lines:
+        if line.startswith("VOICE_TOOLS_OPENAI_KEY="):
+            if not inserted:
+                output.append(selected_line)
+                inserted = True
+            continue
+        output.append(line)
+
+    if not inserted:
+        if output and output[-1].strip():
+            output.append("")
+        output.append("# Local OpenAI-compatible audio key used by agent-voice.")
+        output.append(selected_line)
+    return "\n".join(output).rstrip() + "\n"
 
 
 def _yaml() -> YAML:

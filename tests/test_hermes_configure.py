@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 
 from ruamel.yaml import YAML
 
-from tests.helpers.public_contract import require_executable, run_with_home, tree_snapshot
+from tests.helpers.public_contract import make_fake_bin, require_executable, run_with_home, tree_snapshot
 
 
 def _load_yaml(text: str):
@@ -66,6 +67,8 @@ def test_configure_hermes_updates_config_env_and_writes_backups(tmp_path: Path) 
             "hermes",
             "--server",
             "http://127.0.0.1:9999/v1",
+            "--model",
+            "custom-tts",
             "--voice",
             "warm_wisdom",
         ],
@@ -77,7 +80,7 @@ def test_configure_hermes_updates_config_env_and_writes_backups(tmp_path: Path) 
     updated_env = env.read_text(encoding="utf-8")
     loaded = _load_yaml(updated_config)
     assert loaded["tts"]["provider"] == "openai"
-    assert loaded["tts"]["openai"]["model"] == "qwen3-tts"
+    assert loaded["tts"]["openai"]["model"] == "custom-tts"
     assert loaded["tts"]["openai"]["voice"] == "warm_wisdom"
     assert loaded["tts"]["openai"]["base_url"] == "http://127.0.0.1:9999/v1"
     assert loaded["voice"]["auto_tts"] is True
@@ -159,6 +162,40 @@ def test_configure_hermes_sets_empty_voice_tools_key(tmp_path: Path) -> None:
     assert (hermes / ".env").read_text(encoding="utf-8") == "VOICE_TOOLS_OPENAI_KEY=agent-voice-local\n"
 
 
+def test_configure_hermes_deduplicates_voice_tools_key_preserving_existing_value(tmp_path: Path) -> None:
+    command = require_executable("agent-voice")
+    home = tmp_path / "home"
+    hermes = home / ".hermes"
+    hermes.mkdir(parents=True)
+    (hermes / "config.yaml").write_text("tts: {}\n", encoding="utf-8")
+    (hermes / ".env").write_text(
+        "VOICE_TOOLS_OPENAI_KEY=real-key\nOTHER=value\nVOICE_TOOLS_OPENAI_KEY=\n",
+        encoding="utf-8",
+    )
+
+    result = run_with_home([str(command), "configure", "hermes"], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert (hermes / ".env").read_text(encoding="utf-8") == "VOICE_TOOLS_OPENAI_KEY=real-key\nOTHER=value\n"
+
+
+def test_configure_hermes_replaces_null_yaml_blocks(tmp_path: Path) -> None:
+    command = require_executable("agent-voice")
+    home = tmp_path / "home"
+    hermes = home / ".hermes"
+    hermes.mkdir(parents=True)
+    config = hermes / "config.yaml"
+    config.write_text("tts: ~ # null tts\nvoice:\n", encoding="utf-8")
+
+    result = run_with_home([str(command), "configure", "hermes"], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    loaded = _load_yaml(config.read_text(encoding="utf-8"))
+    assert loaded["tts"]["provider"] == "openai"
+    assert loaded["tts"]["openai"]["model"] == "qwen3-tts"
+    assert loaded["voice"]["auto_tts"] is True
+
+
 def test_configure_hermes_rejects_outside_home_without_opt_in(tmp_path: Path) -> None:
     command = require_executable("agent-voice")
     outside = tmp_path / "outside-hermes"
@@ -191,3 +228,33 @@ def test_configure_hermes_allows_outside_home_with_opt_in(tmp_path: Path) -> Non
 
     assert result.returncode == 0, result.stderr
     assert (outside / "config.yaml").exists()
+
+
+def test_configure_hermes_restart_gateway_times_out(tmp_path: Path) -> None:
+    command = require_executable("agent-voice")
+    home = tmp_path / "home"
+    hermes = home / ".hermes"
+    hermes.mkdir(parents=True)
+    fake_bin = tmp_path / "fake-bin"
+    make_fake_bin(
+        fake_bin,
+        "hermes",
+        "#!/usr/bin/env bash\nsleep 1\n",
+    )
+
+    result = run_with_home(
+        [
+            str(command),
+            "configure",
+            "hermes",
+            "--restart-gateway",
+            "--restart-timeout-seconds",
+            "0.01",
+        ],
+        tmp_path,
+        extra_env={"PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{os.environ.get('PATH', '')}"},
+        timeout=5,
+    )
+
+    assert result.returncode == 1
+    assert "timed out" in result.stderr

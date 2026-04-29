@@ -245,7 +245,7 @@ def test_speech_rejects_unsupported_response_format() -> None:
 
     response = client.post(
         "/v1/audio/speech",
-        json={"input": "hello", "voice": "cyberpunk_cool", "response_format": "aac"},
+        json={"input": "hello", "voice": "cyberpunk_cool", "response_format": "ogg"},
     )
 
     assert response.status_code == 400

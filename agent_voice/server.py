@@ -33,6 +33,7 @@ TTS_GENERATION_ATTEMPTS = int(os.getenv("AGENT_VOICE_TTS_GENERATION_ATTEMPTS") o
 TTS_MAX_SEGMENT_CHARS = int(os.getenv("AGENT_VOICE_TTS_MAX_SEGMENT_CHARS") or "1200")
 TTS_SEGMENT_SILENCE_SECONDS = float(os.getenv("AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS") or "0.18")
 TTS_REQUEST_MAX_TOKENS_LIMIT = 100000
+FFMPEG_TIMEOUT_SECONDS = float(os.getenv("AGENT_VOICE_FFMPEG_TIMEOUT_SECONDS") or "60")
 MAX_STT_UPLOAD_BYTES = int(os.getenv("AGENT_VOICE_MAX_STT_UPLOAD_BYTES") or str(25 * 1024 * 1024))
 ALLOWED_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"}
 SAFE_STT_GENERATION_OPTIONS = {"language", "verbose", "max_tokens", "chunk_duration", "initial_prompt"}
@@ -40,7 +41,6 @@ TTS_RESPONSE_FORMATS = {
     "wav": {"container": "wav", "media_type": "audio/wav"},
     "mp3": {"container": "mp3", "media_type": "audio/mpeg"},
     "opus": {"container": "ogg", "media_type": "audio/ogg"},
-    "ogg": {"container": "ogg", "media_type": "audio/ogg"},
     "flac": {"container": "flac", "media_type": "audio/flac"},
 }
 
@@ -213,7 +213,7 @@ def _convert_wav_bytes(wav_bytes: bytes, response_format: str) -> bytes:
 
     if response_format == "mp3":
         cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0", "-f", "mp3", "pipe:1"]
-    elif response_format in {"opus", "ogg"}:
+    elif response_format == "opus":
         cmd = [
             ffmpeg,
             "-hide_banner",
@@ -238,7 +238,7 @@ def _convert_wav_bytes(wav_bytes: bytes, response_format: str) -> bytes:
     else:  # pragma: no cover - protected by _normalize_tts_response_format
         raise RuntimeError(f"Unsupported response_format={response_format}")
 
-    result = subprocess.run(cmd, input=wav_bytes, capture_output=True, timeout=60)
+    result = subprocess.run(cmd, input=wav_bytes, capture_output=True, timeout=FFMPEG_TIMEOUT_SECONDS)
     if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", errors="replace").strip()
         raise AudioFormatError(f"ffmpeg failed for response_format={response_format}: {stderr}")

@@ -31,9 +31,8 @@ default.
     - `max_tokens`, optional TTS generation budget
   - rejects unknown `voice` values with HTTP 400 unless `instruct` is
     provided.
-  - supports `response_format` values `wav`, `mp3`, `opus`, `ogg`, and `flac`.
-    MP3 and Opus/OGG output require `ffmpeg`; WAV and FLAC do not. `ogg` is
-    an alias for Opus-in-Ogg.
+  - supports `response_format` values `wav`, `mp3`, `opus`, and `flac`.
+    MP3 and Opus output require `ffmpeg`; WAV and FLAC do not.
   - rejects other `response_format` values with HTTP 400.
   - does not impose a request character cap. Long requests may be split into
     multiple synthesis segments server-side and concatenated into one response
@@ -140,7 +139,7 @@ Hermes configuration behavior:
 - `agent-voice configure hermes` updates `~/.hermes/config.yaml` so Hermes uses
   the local OpenAI-compatible speech endpoint:
   - `tts.provider: openai`
-  - `tts.openai.model: qwen3-tts`
+  - `tts.openai.model: qwen3-tts` unless overridden.
   - `tts.openai.voice: cyberpunk_cool` unless overridden.
   - `tts.openai.base_url: http://127.0.0.1:8880/v1` unless overridden.
   - `voice.auto_tts: true` by default.

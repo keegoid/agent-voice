@@ -39,6 +39,12 @@ Use a different preset voice:
 agent-voice configure hermes --voice warm_wisdom --restart-gateway
 ```
 
+Use a different local model alias:
+
+```bash
+agent-voice configure hermes --model qwen3-tts --restart-gateway
+```
+
 Keep Hermes auto-TTS off while still configuring the local voice backend:
 
 ```bash
@@ -79,7 +85,6 @@ hermes gateway restart
 - Hermes usually requests MP3 for Discord and desktop output. `agent-voice`
   supports `response_format: mp3` directly.
 - Telegram-style Opus output is supported with `response_format: opus`.
-  `response_format: ogg` is an alias for Opus-in-Ogg, not Vorbis.
 - MP3 and Opus output require `ffmpeg` on `PATH`. WAV and FLAC do not.
 - `voice.auto_tts: true` makes Hermes speak replies to voice-message flows. For
   voice attachments on every text reply in a specific messaging channel, run
