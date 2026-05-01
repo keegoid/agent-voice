@@ -6,6 +6,7 @@ set -euo pipefail
 server_url="${AGENT_VOICE_SERVER:-http://127.0.0.1:8880}"
 voice="${AGENT_VOICE_VOICE:-cyberpunk_cool}"
 speech_timeout="${AGENT_VOICE_SPEECH_TIMEOUT_SECONDS:-600}"
+playback_timeout="${AGENT_VOICE_PLAYBACK_TIMEOUT_SECONDS:-}"
 max_tokens="${AGENT_VOICE_TTS_MAX_TOKENS:-}"
 instruct=""
 output=""
@@ -23,6 +24,7 @@ Options:
   --max-tokens N        Per-request TTS token budget.
   -s, --server URL      TTS server URL. Default: http://127.0.0.1:8880.
   -o, --output PATH     Save WAV to PATH instead of a temp file.
+  --play-timeout N      Max playback seconds. Default: WAV duration plus grace.
   --no-play             Generate WAV but do not play it.
   -h, --help            Show this help.
 USAGE
@@ -48,6 +50,11 @@ while [[ $# -gt 0 ]]; do
     --max-tokens)
       [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
       max_tokens="$2"
+      shift 2
+      ;;
+    --play-timeout)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
+      playback_timeout="$2"
       shift 2
       ;;
     -o|--output)
@@ -99,11 +106,20 @@ if ! [[ "$speech_timeout" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "Speech timeout must be a positive number of seconds" >&2
   exit 2
 fi
+if [[ "$play" -eq 1 && -n "$playback_timeout" && ! "$playback_timeout" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "Playback timeout must be a positive number of seconds" >&2
+  exit 2
+fi
 
 command -v curl >/dev/null || { echo "curl not found" >&2; exit 1; }
 command -v jq >/dev/null || { echo "jq not found" >&2; exit 1; }
 if [[ "$play" -eq 1 ]]; then
-  command -v afplay >/dev/null || { echo "afplay not found" >&2; exit 1; }
+  afplay_path="$(command -v afplay)" || { echo "afplay not found" >&2; exit 1; }
+  playback_python="${AGENT_VOICE_PLAYBACK_PYTHON:-/usr/bin/python3}"
+  if [[ ! -x "$playback_python" ]]; then
+    playback_python="$(command -v python3 2>/dev/null || true)"
+  fi
+  [[ -n "$playback_python" && -x "$playback_python" ]] || { echo "python3 not found" >&2; exit 1; }
 fi
 
 health="$(curl -fsS --max-time 3 "$server_url/v1/health")" || {
@@ -121,13 +137,17 @@ if [[ -n "$output" ]]; then
   wav="$output"
   cleanup=0
 else
-  wav="$(mktemp "${TMPDIR:-/tmp}/agent-voice-summary.XXXXXX")"
+  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/agent-voice-summary.XXXXXX")"
+  wav="$tmpdir/summary.wav"
   cleanup=1
 fi
 
 finish() {
   if [[ "${cleanup:-0}" -eq 1 && -n "${wav:-}" ]]; then
     rm -f "$wav"
+  fi
+  if [[ "${cleanup:-0}" -eq 1 && -n "${tmpdir:-}" ]]; then
+    rmdir "$tmpdir" 2>/dev/null || true
   fi
 }
 trap finish EXIT
@@ -151,8 +171,68 @@ curl -fsS --max-time "$speech_timeout" \
   "$server_url/v1/audio/speech" \
   -o "$wav"
 
+wav_duration() {
+  "$playback_python" - "$wav" <<'PY'
+import sys
+import wave
+
+try:
+    with wave.open(sys.argv[1], "rb") as audio:
+        rate = audio.getframerate()
+        frames = audio.getnframes()
+    if rate <= 0:
+        raise ValueError("invalid sample rate")
+    print(f"{frames / rate:.3f}")
+except Exception:
+    sys.exit(1)
+PY
+}
+
+default_playback_timeout() {
+  duration="$(wav_duration 2>/dev/null || true)"
+  if [[ -z "$duration" ]]; then
+    echo 120
+    return
+  fi
+  "$playback_python" - "$duration" <<'PY'
+import math
+import sys
+
+duration = float(sys.argv[1])
+print(max(30, math.ceil(duration + 15)))
+PY
+}
+
+play_wav() {
+  timeout_seconds="${playback_timeout:-$(default_playback_timeout)}"
+  "$playback_python" - "$afplay_path" "$timeout_seconds" "$wav" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+afplay, timeout_raw, wav = sys.argv[1:]
+timeout = float(timeout_raw)
+process = subprocess.Popen([afplay, wav], start_new_session=True)
+try:
+    rc = process.wait(timeout=timeout)
+except subprocess.TimeoutExpired:
+    print(f"afplay timed out after {timeout:g}s", file=sys.stderr)
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=2)
+    except Exception:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except Exception:
+            pass
+    sys.exit(124)
+sys.exit(rc)
+PY
+}
+
 if [[ "$play" -eq 1 ]]; then
-  afplay "$wav"
+  play_wav
 fi
 
 if [[ "$cleanup" -eq 0 ]]; then

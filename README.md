@@ -80,7 +80,15 @@ Speech generation defaults to `AGENT_VOICE_TTS_MAX_TOKENS=24000`. There is no
 request character cap; long requests are split into bounded synthesis segments
 and concatenated so agent summaries can stay useful without caller-side
 trimming. If a generated segment is implausibly short for the text length, the
-server retries it once with more conservative sampling.
+server retries it once with more conservative sampling. The short-clip detector
+also covers terse agent status cues and clips that speak only at the beginning
+then continue as silence. Tune it with
+`AGENT_VOICE_TTS_SUSPICIOUS_MIN_WORDS`,
+`AGENT_VOICE_TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND`, and
+`AGENT_VOICE_TTS_SUSPICIOUS_MIN_SECONDS` if needed. The detector measures
+the longest contiguous active-speech span using `AGENT_VOICE_TTS_ACTIVITY_WINDOW_SECONDS`,
+`AGENT_VOICE_TTS_ACTIVITY_MIN_RMS`, and
+`AGENT_VOICE_TTS_ACTIVITY_RELATIVE_RMS`.
 Segment joins use `AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS=0.18` by default.
 
 The launchd service sets `HF_HOME` to
@@ -105,6 +113,9 @@ agent-voice uninstall
 `agent-speak "message"` is intentionally safe: if the server is offline, it
 logs and exits successfully so the calling task can continue.
 Use `AGENT_VOICE_*` environment variables for configuration.
+Playback is bounded separately from generation: `agent-voice-summary` defaults
+to a playback timeout based on the generated WAV duration plus grace, and
+`AGENT_VOICE_PLAYBACK_TIMEOUT_SECONDS` or `--play-timeout` can override it.
 
 Uninstall removes only shims that point at the managed `agent-voice` install. If
 an earlier shim was backed up during install, uninstall restores that previous

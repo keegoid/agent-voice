@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.helpers.public_contract import MockSpeechServer, require_executable, run_with_home
+from tests.helpers.public_contract import MockSpeechServer, make_fake_bin, require_executable, run_with_home
 
 
 def test_agent_speak_no_args_is_safe_success(tmp_path: Path) -> None:
@@ -120,3 +120,70 @@ def test_agent_voice_summary_allows_custom_instruct_without_listed_voice(tmp_pat
     request = server.requests[0].body
     assert request["voice"] == "custom_contract_voice"
     assert request["instruct"] == "Speak warmly and clearly."
+
+
+def test_agent_voice_summary_times_out_hung_afplay(tmp_path: Path) -> None:
+    helper = require_executable("agent-voice-summary")
+    fake_bin = tmp_path / "home" / ".local" / "bin"
+    make_fake_bin(
+        fake_bin,
+        "afplay",
+        """
+        #!/usr/bin/env bash
+        sleep 5
+        """,
+    )
+
+    with MockSpeechServer() as server:
+        result = run_with_home(
+            [
+                str(helper),
+                "--server",
+                server.url,
+                "--play-timeout",
+                "0.2",
+                "hello from tests",
+            ],
+            tmp_path,
+            timeout=5,
+        )
+
+    assert result.returncode == 124
+    assert "afplay timed out" in result.stderr
+
+
+def test_agent_voice_summary_uses_wav_suffix_for_temp_playback(tmp_path: Path) -> None:
+    helper = require_executable("agent-voice-summary")
+    fake_bin = tmp_path / "home" / ".local" / "bin"
+    seen_path = tmp_path / "played-path.txt"
+    make_fake_bin(
+        fake_bin,
+        "afplay",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s' "$1" > "{seen_path}"
+        """,
+    )
+
+    with MockSpeechServer() as server:
+        result = run_with_home(
+            [
+                str(helper),
+                "--server",
+                server.url,
+                "hello from tests",
+            ],
+            tmp_path,
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert seen_path.read_text(encoding="utf-8").endswith(".wav")
+
+
+def test_agent_voice_summary_rejects_invalid_playback_timeout(tmp_path: Path) -> None:
+    helper = require_executable("agent-voice-summary")
+
+    result = run_with_home([str(helper), "--play-timeout", "abc", "hello"], tmp_path)
+
+    assert result.returncode == 2
+    assert "Playback timeout" in result.stderr

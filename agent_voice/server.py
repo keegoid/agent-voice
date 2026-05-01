@@ -16,7 +16,7 @@ import threading
 import time
 import warnings
 from contextlib import contextmanager
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 
 import numpy as np
@@ -37,6 +37,15 @@ TTS_MAX_TOKENS = int(os.getenv("AGENT_VOICE_TTS_MAX_TOKENS") or "24000")
 TTS_GENERATION_ATTEMPTS = int(os.getenv("AGENT_VOICE_TTS_GENERATION_ATTEMPTS") or "2")
 TTS_MAX_SEGMENT_CHARS = int(os.getenv("AGENT_VOICE_TTS_MAX_SEGMENT_CHARS") or "1200")
 TTS_SEGMENT_SILENCE_SECONDS = float(os.getenv("AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS") or "0.18")
+TTS_SUSPICIOUS_MIN_WORDS = int(os.getenv("AGENT_VOICE_TTS_SUSPICIOUS_MIN_WORDS") or "4")
+TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND = float(
+    os.getenv("AGENT_VOICE_TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND") or "5.5"
+)
+TTS_SUSPICIOUS_MIN_SECONDS = float(os.getenv("AGENT_VOICE_TTS_SUSPICIOUS_MIN_SECONDS") or "1.0")
+TTS_ACTIVITY_WINDOW_SECONDS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_WINDOW_SECONDS") or "0.25")
+TTS_ACTIVITY_MIN_RMS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_MIN_RMS") or "0.004")
+TTS_ACTIVITY_RELATIVE_RMS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_RELATIVE_RMS") or "0.08")
+TTS_ACTIVITY_MAX_SILENT_GAP_SECONDS = 0.75
 TTS_REQUEST_MAX_TOKENS_LIMIT = 100000
 FFMPEG_TIMEOUT_SECONDS = float(os.getenv("AGENT_VOICE_FFMPEG_TIMEOUT_SECONDS") or "60")
 MAX_STT_UPLOAD_BYTES = int(os.getenv("AGENT_VOICE_MAX_STT_UPLOAD_BYTES") or str(25 * 1024 * 1024))
@@ -65,6 +74,13 @@ _MLX_WHISPER_PROCESSOR_WARNING = r"Could not load WhisperProcessor: .*"
 
 class AudioFormatError(RuntimeError):
     """Raised when requested response audio encoding cannot be produced."""
+
+
+@dataclass(frozen=True)
+class AudioActivity:
+    duration_seconds: float
+    active_seconds: float
+    active_end_seconds: float
 
 
 class _MessagePrefixFilter(logging.Filter):
@@ -307,6 +323,7 @@ def _generate_audio_segment(
     attempts = max(1, TTS_GENERATION_ATTEMPTS)
     best_audio = np.array([], dtype=np.float32)
     best_sample_rate = 24000
+    best_active_seconds = -1.0
 
     for attempt in range(attempts):
         audio, sample_rate, token_count = _generate_audio_segment_once(
@@ -317,15 +334,21 @@ def _generate_audio_segment(
             max_tokens=max_tokens,
             attempt=attempt,
         )
-        if audio.size > best_audio.size:
+        activity = _audio_activity(audio, sample_rate)
+        if activity.active_seconds > best_active_seconds or (
+            activity.active_seconds == best_active_seconds and audio.size > best_audio.size
+        ):
             best_audio = audio
             best_sample_rate = sample_rate
+            best_active_seconds = activity.active_seconds
         if not _is_suspiciously_short_audio(text, audio, sample_rate):
             return audio, sample_rate
         if attempt < attempts - 1:
             print(
                 "Retrying suspiciously short TTS segment "
-                f"(attempt={attempt + 1}, words={_word_count(text)}, seconds={audio.size / sample_rate:.2f}, "
+                f"(attempt={attempt + 1}, words={_word_count(text)}, "
+                f"active_seconds={activity.active_seconds:.2f}, "
+                f"duration_seconds={activity.duration_seconds:.2f}, "
                 f"tokens={token_count})",
                 file=sys.stderr,
             )
@@ -420,12 +443,81 @@ def _word_count(text: str) -> int:
 
 def _is_suspiciously_short_audio(text: str, audio: np.ndarray, sample_rate: int) -> bool:
     words = _word_count(text)
-    if words < 12 or sample_rate <= 0 or audio.size == 0:
+    if words < TTS_SUSPICIOUS_MIN_WORDS or sample_rate <= 0 or audio.size == 0:
         return False
-    duration_seconds = audio.size / sample_rate
-    # 6.5 words/sec is intentionally permissive; only retry obvious early-EOS clips.
-    min_reasonable_seconds = max(2.0, words / 6.5)
-    return duration_seconds < min_reasonable_seconds
+    activity = _audio_activity(audio, sample_rate)
+    # The threshold is intentionally permissive; only retry obvious early-EOS or
+    # speech-then-silence clips.
+    min_reasonable_seconds = max(
+        TTS_SUSPICIOUS_MIN_SECONDS,
+        words / TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND,
+    )
+    return activity.active_seconds < min_reasonable_seconds
+
+
+def _audio_activity(audio: np.ndarray, sample_rate: int) -> AudioActivity:
+    if sample_rate <= 0 or audio.size == 0:
+        return AudioActivity(duration_seconds=0.0, active_seconds=0.0, active_end_seconds=0.0)
+
+    samples = np.asarray(audio, dtype=np.float32)
+    if samples.ndim > 1:
+        samples = np.mean(samples, axis=1)
+    samples = np.nan_to_num(samples, nan=0.0, posinf=0.0, neginf=0.0)
+
+    duration_seconds = samples.size / sample_rate
+    window_samples = max(1, int(sample_rate * TTS_ACTIVITY_WINDOW_SECONDS))
+    rms_values = []
+    for start in range(0, samples.size, window_samples):
+        window = samples[start : start + window_samples]
+        if window.size:
+            rms_values.append(float(np.sqrt(np.mean(window * window))))
+    if not rms_values:
+        return AudioActivity(
+            duration_seconds=duration_seconds,
+            active_seconds=0.0,
+            active_end_seconds=0.0,
+        )
+
+    rms = np.asarray(rms_values, dtype=np.float32)
+    threshold = max(TTS_ACTIVITY_MIN_RMS, float(np.max(rms)) * TTS_ACTIVITY_RELATIVE_RMS)
+    active_indexes = np.flatnonzero(rms > threshold)
+    if active_indexes.size == 0:
+        return AudioActivity(
+            duration_seconds=duration_seconds,
+            active_seconds=0.0,
+            active_end_seconds=0.0,
+        )
+
+    active_seconds = min(
+        duration_seconds,
+        _longest_active_span_windows(
+            active_indexes,
+            max_inactive_gap_windows=max(0, int(TTS_ACTIVITY_MAX_SILENT_GAP_SECONDS / TTS_ACTIVITY_WINDOW_SECONDS)),
+        )
+        * window_samples
+        / sample_rate,
+    )
+    active_end_seconds = min(duration_seconds, (int(active_indexes[-1]) + 1) * window_samples / sample_rate)
+    return AudioActivity(
+        duration_seconds=duration_seconds,
+        active_seconds=active_seconds,
+        active_end_seconds=active_end_seconds,
+    )
+
+
+def _longest_active_span_windows(active_indexes: np.ndarray, max_inactive_gap_windows: int) -> int:
+    """Return the longest active span, allowing natural short pauses."""
+    longest = 1
+    run_start = int(active_indexes[0])
+    previous = run_start
+    for raw_index in active_indexes[1:]:
+        index = int(raw_index)
+        if index - previous <= max_inactive_gap_windows + 1:
+            longest = max(longest, index - run_start + 1)
+        else:
+            run_start = index
+        previous = index
+    return longest
 
 
 def _sanitize_for_json(value: Any) -> Any:
