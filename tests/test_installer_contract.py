@@ -321,3 +321,50 @@ def test_installer_fails_when_launchd_bootstrap_fails(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "bootstrap denied" in result.stderr
+
+
+def test_agent_voice_restart_bootstraps_after_unload_without_force_kickstart(tmp_path: Path) -> None:
+    installer = require_installer()
+    home = tmp_path / "home"
+    fake_bin = tmp_path / "fake-bin"
+    state = tmp_path / "launchd.state"
+    log = tmp_path / "launchctl.log"
+    make_fake_bin(
+        fake_bin,
+        "launchctl",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s\\n' "$*" >> "{log}"
+        case "$1" in
+          print)
+            if [[ -f "{state}" ]]; then
+              exit 0
+            fi
+            exit 42
+            ;;
+          bootout)
+            rm -f "{state}"
+            exit 0
+            ;;
+          bootstrap)
+            touch "{state}"
+            exit 0
+            ;;
+          kickstart)
+            exit 0
+            ;;
+        esac
+        exit 0
+        """,
+    )
+    env = {"PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}"}
+
+    install = run_with_home([str(installer)], tmp_path, input_text="n\n", extra_env=env, timeout=20)
+    assert install.returncode == 0, install.stderr
+
+    command = installed_command(tmp_path, "agent-voice")
+    restart = run_with_home([str(command), "restart"], tmp_path, extra_env=env, timeout=20)
+
+    assert restart.returncode == 0, restart.stderr
+    assert state.exists()
+    assert "kickstart -k" not in log.read_text(encoding="utf-8")

@@ -331,7 +331,6 @@ start_launchd_service() {
     : >"$err_file"
     if run launchctl bootstrap "$domain" "$PLIST" 2>"$err_file"; then
       rm -f "$err_file"
-      run launchctl kickstart -k "$domain/$LABEL"
       return 0
     fi
     sleep 0.2

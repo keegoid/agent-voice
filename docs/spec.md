@@ -38,7 +38,10 @@ default.
     multiple synthesis segments server-side and concatenated into one response
     audio file.
   - defaults to `AGENT_VOICE_TTS_MAX_TOKENS=24000` and retries suspiciously
-    short generated segments once by default.
+    short generated segments once by default, including terse status cues and
+    clips that speak only at the beginning then continue as silence.
+  - uses contiguous active-speech duration, not total audio file length, for
+    suspiciously short segment detection.
   - inserts `AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS=0.18` seconds of silence
     between generated segments by default.
   - returns generated audio bytes with the correct audio media type.
@@ -92,7 +95,11 @@ Public voice names are:
 - checks `curl`, `jq`, and `afplay` when playback is enabled.
 - calls `/v1/health`, validates the requested voice, and sends a JSON request
   to `/v1/audio/speech`.
-- supports `--voice`, `--server`, `--output`, `--no-play`, and `--help`.
+- supports `--voice`, `--server`, `--output`, `--play-timeout`, `--no-play`,
+  and `--help`.
+- bounds `afplay` runtime with a duration-aware timeout by default. The
+  `AGENT_VOICE_PLAYBACK_TIMEOUT_SECONDS` environment variable overrides that
+  default.
 - writes the output path only when `--output` is used.
 
 `agent-speak` is the safe helper. It:

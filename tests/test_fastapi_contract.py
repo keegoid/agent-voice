@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import concurrent.futures
+import io
 import json
 import logging
 import os
 import threading
 import time
 import warnings
+import wave
 from typing import Any
 
 import pytest
@@ -286,6 +288,131 @@ def test_generate_audio_serializes_shared_tts_model(monkeypatch: pytest.MonkeyPa
     assert all(result.startswith(b"RIFF") for result in results)
     assert state["calls"] == 2
     assert state["overlap"] is False
+
+
+def test_generate_audio_retries_suspiciously_short_status_clip(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    calls = 0
+
+    class FakeResult:
+        sample_rate = 24000
+        token_count = 100
+
+        def __init__(self, samples: int) -> None:
+            self.audio = [0.0] * samples
+
+    class FakeModel:
+        def generate_voice_design(self, **_kwargs: Any) -> list[FakeResult]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return [FakeResult(1200)]
+            return [FakeResult(48000)]
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+
+    audio = server.generate_audio(
+        text="Short status should finish cleanly",
+        instruct="clear voice",
+        language="English",
+        response_format="wav",
+        max_tokens=123,
+    )
+
+    assert audio.startswith(b"RIFF")
+    assert calls == 2
+
+
+def test_generate_audio_retries_speech_followed_by_silence(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    calls = 0
+    sample_rate = 24000
+
+    class FakeResult:
+        sample_rate = 24000
+        token_count = 100
+
+        def __init__(self, audio: Any) -> None:
+            self.audio = audio
+
+    class FakeModel:
+        def generate_voice_design(self, **_kwargs: Any) -> list[FakeResult]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                clipped = server.np.concatenate(
+                    [
+                        server.np.full(sample_rate, 0.1, dtype=server.np.float32),
+                        server.np.zeros(sample_rate * 10, dtype=server.np.float32),
+                    ]
+                )
+                return [FakeResult(clipped)]
+            complete = server.np.full(sample_rate * 5, 0.1, dtype=server.np.float32)
+            return [FakeResult(complete)]
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+
+    audio = server.generate_audio(
+        text="This status sentence should not stop speaking after the first clause.",
+        instruct="clear voice",
+        language="English",
+        response_format="wav",
+        max_tokens=123,
+    )
+
+    with wave.open(io.BytesIO(audio), "rb") as wav:
+        duration = wav.getnframes() / wav.getframerate()
+
+    assert calls == 2
+    assert duration == pytest.approx(5.0)
+
+
+def test_generate_audio_retries_interrupted_speech_with_late_blip(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    calls = 0
+    sample_rate = 24000
+
+    class FakeResult:
+        sample_rate = 24000
+        token_count = 100
+
+        def __init__(self, audio: Any) -> None:
+            self.audio = audio
+
+    class FakeModel:
+        def generate_voice_design(self, **_kwargs: Any) -> list[FakeResult]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                interrupted = server.np.concatenate(
+                    [
+                        server.np.full(sample_rate // 2, 0.1, dtype=server.np.float32),
+                        server.np.zeros(sample_rate * 8, dtype=server.np.float32),
+                        server.np.full(sample_rate // 2, 0.1, dtype=server.np.float32),
+                    ]
+                )
+                return [FakeResult(interrupted)]
+            complete = server.np.full(sample_rate * 5, 0.1, dtype=server.np.float32)
+            return [FakeResult(complete)]
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+
+    audio = server.generate_audio(
+        text="This status sentence should not be counted as complete by a late audio blip.",
+        instruct="clear voice",
+        language="English",
+        response_format="wav",
+        max_tokens=123,
+    )
+
+    with wave.open(io.BytesIO(audio), "rb") as wav:
+        duration = wav.getnframes() / wav.getframerate()
+
+    assert calls == 2
+    assert duration == pytest.approx(5.0)
 
 
 def test_split_speech_text_bounds_single_long_word() -> None:
