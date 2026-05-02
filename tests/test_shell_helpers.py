@@ -74,6 +74,51 @@ def test_agent_voice_summary_sends_max_tokens_when_requested(tmp_path: Path) -> 
     assert server.requests[0].body["max_tokens"] == 32123
 
 
+def test_agent_voice_summary_skips_speech_when_server_muted(tmp_path: Path) -> None:
+    helper = require_executable("agent-voice-summary")
+
+    with MockSpeechServer(muted=True) as server:
+        result = run_with_home(
+            [str(helper), "--server", server.url, "--no-play", "hello from tests"],
+            tmp_path,
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert server.requests == []
+
+
+def test_agent_voice_mute_commands_update_state(tmp_path: Path) -> None:
+    command = require_executable("agent-voice")
+    state = tmp_path / "mute.json"
+    env = {"AGENT_VOICE_MUTE_STATE": str(state)}
+
+    muted = run_with_home([str(command), "mute"], tmp_path, extra_env=env)
+    status = run_with_home([str(command), "mute", "status"], tmp_path, extra_env=env)
+    unmuted = run_with_home([str(command), "unmute"], tmp_path, extra_env=env)
+
+    assert muted.returncode == 0, muted.stderr
+    assert muted.stdout.strip() == "muted"
+    assert status.stdout.strip() == "muted"
+    assert unmuted.returncode == 0, unmuted.stderr
+    assert unmuted.stdout.strip() == "unmuted"
+    assert json.loads(state.read_text(encoding="utf-8"))["muted"] is False
+
+
+def test_agent_voice_mute_command_rejects_mutation_with_env_override(tmp_path: Path) -> None:
+    command = require_executable("agent-voice")
+    state = tmp_path / "mute.json"
+    env = {"AGENT_VOICE_MUTE_STATE": str(state), "AGENT_VOICE_MUTED": "true"}
+
+    status = run_with_home([str(command), "mute", "status"], tmp_path, extra_env=env)
+    changed = run_with_home([str(command), "mute", "off"], tmp_path, extra_env=env)
+
+    assert status.returncode == 0, status.stderr
+    assert status.stdout.strip() == "muted"
+    assert changed.returncode == 1
+    assert "AGENT_VOICE_MUTED" in changed.stderr
+    assert not state.exists()
+
+
 def test_agent_voice_summary_rejects_invalid_max_tokens(tmp_path: Path) -> None:
     helper = require_executable("agent-voice-summary")
 

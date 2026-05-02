@@ -139,9 +139,16 @@ class SpeechRequest:
 
 
 class MockSpeechServer:
-    def __init__(self, *, voices: Iterable[str] = PUBLIC_VOICES, audio: bytes = b"RIFFtestWAVEfmt ") -> None:
+    def __init__(
+        self,
+        *,
+        voices: Iterable[str] = PUBLIC_VOICES,
+        audio: bytes = b"RIFFtestWAVEfmt ",
+        muted: bool = False,
+    ) -> None:
         self.voices = list(voices)
         self.audio = audio
+        self.muted = muted
         self.requests: list[SpeechRequest] = []
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -160,7 +167,12 @@ class MockSpeechServer:
                 if self.path != "/v1/health":
                     self.send_error(404)
                     return
-                payload = {"status": "ok", "model": "qwen3-tts", "voices": outer.voices}
+                payload = {
+                    "status": "ok",
+                    "model": "qwen3-tts",
+                    "voices": outer.voices,
+                    "muted": outer.muted,
+                }
                 self.send_response(200)
                 self.send_header("content-type", "application/json")
                 self.end_headers()
