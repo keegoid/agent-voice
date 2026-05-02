@@ -2,6 +2,31 @@
 
 from __future__ import annotations
 
+_COOL_FIGMENT_RAIN_VOICE_LOCKED = (
+    "A young woman voice actor with a natural mid-range voice, guarded and sharp. "
+    "She sounds like black-market tech that still works after the rain: cool, "
+    "useful, unimpressed. Clipped phrasing, dry edge, neon-lit back-alley energy, "
+    "clean studio tone. No low register, no gravel, no distortion; keep the "
+    "scolding adult and sardonic. Maintain one consistent speaker identity for "
+    "the entire output: same timbre, pitch center, age, accent, microphone "
+    "distance, and vocal texture from sentence to sentence. Emotional swings "
+    "should change only cadence, pause length, intensity, and emphasis. Do not "
+    "morph into a different voice, character, register, accent, or age between "
+    "sentences."
+)
+
+_COOL_STREET_DEADPAN_VOICE_LOCKED = (
+    "A young woman voice actor with a centered mid-range tone and street-smart "
+    "disdain held under glass. Deadpan, clipped, and precise, with clean emphasis "
+    "on the insult. Neon-lit back-alley energy without the growl: smooth studio "
+    "voice, articulate consonants, restrained pressure. Do not sound low, raspy, "
+    "cute, playful, or harsh. Maintain one consistent speaker identity for the "
+    "entire output: same timbre, pitch center, age, accent, microphone distance, "
+    "and vocal texture from sentence to sentence. Emotional swings should change "
+    "only cadence, pause length, intensity, and emphasis. Do not morph into a "
+    "different voice, character, register, accent, or age between sentences."
+)
+
 VOICE_DESIGNS: dict[str, str] = {
     "anime_genki": (
         "A cheerful, high-energy young woman's voice with bright intonation and "
@@ -16,12 +41,9 @@ VOICE_DESIGNS: dict[str, str] = {
         "chess moves. A quiet, knowing laugh lurks behind every phrase. She never "
         "raises her voice because she never needs to; her control is the threat."
     ),
-    "cyberpunk_cool": (
-        "A young woman's voice with a low, gritty rasp and a world-weary edge. "
-        "She speaks like a rogue netrunner jacked into the grid: clipped, precise, "
-        "and dripping with street-smart disdain. Flat affect punctuated by sharp "
-        "emphasis on key words. Neon-lit back-alley energy."
-    ),
+    "cyberpunk_cool": _COOL_FIGMENT_RAIN_VOICE_LOCKED,
+    "cool_figment_rain_voice_locked": _COOL_FIGMENT_RAIN_VOICE_LOCKED,
+    "cool_street_deadpan_voice_locked": _COOL_STREET_DEADPAN_VOICE_LOCKED,
     "peng_mythic": (
         "A young woman voice actress performing an epic narrator in a fantasy saga. "
         "Her voice is clear and commanding with deep resonance, building steadily "

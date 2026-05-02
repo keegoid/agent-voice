@@ -389,6 +389,89 @@ def test_generate_audio_retries_suspiciously_short_status_clip(monkeypatch: pyte
     assert calls == 2
 
 
+def test_generate_audio_uses_stable_sampling_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    seen: list[dict[str, Any]] = []
+
+    class FakeResult:
+        audio = server.np.full(24000 * 3, 0.1, dtype=server.np.float32)
+        sample_rate = 24000
+        token_count = 100
+
+    class FakeModel:
+        def generate_voice_design(self, **kwargs: Any) -> list[FakeResult]:
+            seen.append(kwargs)
+            return [FakeResult()]
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+
+    audio = server.generate_audio(
+        text="Stable sampling should avoid noisy voice outliers",
+        instruct="clear voice",
+        language="English",
+        response_format="wav",
+        max_tokens=123,
+    )
+
+    assert audio.startswith(b"RIFF")
+    assert seen[0]["temperature"] == server.TTS_TEMPERATURE
+    assert seen[0]["top_p"] == server.TTS_TOP_P
+    assert seen[0]["repetition_penalty"] == server.TTS_REPETITION_PENALTY
+
+
+def test_generate_audio_uses_more_conservative_retry_sampling(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    seen: list[dict[str, Any]] = []
+
+    class FakeResult:
+        sample_rate = 24000
+        token_count = 100
+
+        def __init__(self, audio: Any) -> None:
+            self.audio = audio
+
+    class FakeModel:
+        def generate_voice_design(self, **kwargs: Any) -> list[FakeResult]:
+            seen.append(kwargs)
+            if len(seen) == 1:
+                return [FakeResult(server.np.zeros(2400, dtype=server.np.float32))]
+            return [FakeResult(server.np.full(24000 * 3, 0.1, dtype=server.np.float32))]
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+
+    audio = server.generate_audio(
+        text="Retry sampling should reduce noisy collapsed output",
+        instruct="clear voice",
+        language="English",
+        response_format="wav",
+        max_tokens=123,
+    )
+
+    assert audio.startswith(b"RIFF")
+    assert len(seen) == 2
+    assert seen[1]["temperature"] == server.TTS_RETRY_TEMPERATURE
+    assert seen[1]["top_p"] == server.TTS_RETRY_TOP_P
+    assert seen[1]["repetition_penalty"] == server.TTS_RETRY_REPETITION_PENALTY
+
+
+def test_encode_audio_sanitizes_and_limits_peak() -> None:
+    import agent_voice.server as server
+
+    samples = server.np.array(
+        [0.0, 2.0, -2.0, server.np.nan, server.np.inf, -server.np.inf],
+        dtype=server.np.float32,
+    )
+
+    encoded = server._encode_audio(samples, 24000, "wav")
+    decoded, sample_rate = server.sf.read(io.BytesIO(encoded), dtype="float32")
+
+    assert sample_rate == 24000
+    assert server.np.isfinite(decoded).all()
+    assert float(server.np.max(server.np.abs(decoded))) <= server.TTS_PEAK_LIMIT + 1 / 32768
+
+
 def test_generate_audio_retries_speech_followed_by_silence(monkeypatch: pytest.MonkeyPatch) -> None:
     import agent_voice.server as server
 

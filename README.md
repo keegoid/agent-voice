@@ -164,6 +164,13 @@ OpenAI-compatible speech `response_format` values:
 
 MP3 and Opus responses require `ffmpeg` on `PATH`.
 
+The server uses stable Qwen3 sampling defaults for speech:
+`AGENT_VOICE_TTS_TEMPERATURE` (default `0.9`),
+`AGENT_VOICE_TTS_TOP_P` (default `0.95`), and
+`AGENT_VOICE_TTS_REPETITION_PENALTY` (default `1.05`). Retry attempts use the
+`AGENT_VOICE_TTS_RETRY_*` variants. Before encoding, generated waveforms are
+sanitized and peak-limited with `AGENT_VOICE_TTS_PEAK_LIMIT` (default `0.98`).
+
 Transcription:
 
 ```bash
@@ -186,6 +193,8 @@ Public voices:
 
 - `anime_genki`
 - `anime_villain`
+- `cool_figment_rain_voice_locked`
+- `cool_street_deadpan_voice_locked`
 - `cyberpunk_cool`
 - `peng_mythic`
 - `anime_sultry`
