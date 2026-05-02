@@ -239,6 +239,26 @@ uv run pytest -q
 uv run uvicorn agent_voice.server:app --host 127.0.0.1 --port 8880
 ```
 
+Agent-authored branch, PR, and review work should go through the shared
+Keegoid workflow helper instead of hand-rolled git/GitHub commands:
+
+```bash
+agent-pr-flow begin --actor codex --branch <slug>
+agent-pr-flow commit --actor codex --all --message "<message>"
+agent-pr-flow publish --actor codex --title "<title>" --body-file <file>
+```
+
+After a PR is merged and local `main` is synced, update the installed launchd
+runtime from the checked-out source with:
+
+```bash
+scripts/sync-installed --from main --test
+```
+
+The sync command refuses dirty source trees by default, runs the installer
+non-interactively, writes `~/.agent-voice/install-manifest.json`, restarts via
+the installer, and verifies `/v1/health`.
+
 For real local speech generation, install the MLX extra:
 
 ```bash

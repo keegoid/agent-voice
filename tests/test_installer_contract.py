@@ -74,6 +74,47 @@ def test_installer_backs_up_agents_before_restore(tmp_path: Path) -> None:
     assert backups[0].exists(), "restore must not delete backup sets"
 
 
+def test_installer_no_codex_config_skips_interactive_prompt(tmp_path: Path) -> None:
+    installer = require_installer()
+    home = tmp_path / "home"
+    fake_bin = tmp_path / "fake-bin"
+    make_fake_bin(fake_bin, "launchctl", "#!/bin/sh\nexit 0\n")
+
+    result = run_with_home(
+        [str(installer), "--no-codex-config"],
+        tmp_path,
+        extra_env={"PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}"},
+        timeout=20,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Skipped Codex config update" in result.stdout
+    assert not (home / ".codex" / "AGENTS.md").exists()
+
+
+def test_installer_honors_agent_voice_home(tmp_path: Path) -> None:
+    installer = require_installer()
+    home = tmp_path / "home"
+    state = tmp_path / "custom-agent-voice"
+    fake_bin = tmp_path / "fake-bin"
+    make_fake_bin(fake_bin, "launchctl", "#!/bin/sh\nexit 0\n")
+
+    result = run_with_home(
+        [str(installer), "--no-codex-config"],
+        tmp_path,
+        extra_env={
+            "AGENT_VOICE_HOME": str(state),
+            "PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}",
+        },
+        timeout=20,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (state / "app" / "agent_voice").is_dir()
+    assert (state / "bin" / "agent-voice").is_file()
+    assert not (home / ".agent-voice" / "app").exists()
+
+
 def test_end_to_end_install_disables_existing_local_server_py(tmp_path: Path) -> None:
     installer = require_installer()
     home = tmp_path / "home"
