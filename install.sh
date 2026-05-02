@@ -24,10 +24,11 @@ PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 DRY_RUN=0
 SOURCE_DIR="${AGENT_VOICE_SOURCE_DIR:-}"
 TEST_MODE="${AGENT_VOICE_TEST_MODE:-0}"
+CODEX_CONFIG_MODE="${AGENT_VOICE_INSTALL_CODEX_CONFIG:-ask}"
 
 usage() {
   cat <<'USAGE'
-Usage: install.sh [--dry-run] [--source-dir PATH] [--ref REF] [--archive-sha256 SHA256]
+Usage: install.sh [--dry-run] [--source-dir PATH] [--ref REF] [--archive-sha256 SHA256] [--codex-config|--no-codex-config]
 USAGE
 }
 
@@ -52,6 +53,14 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
       ARCHIVE_SHA256="$2"
       shift 2
+      ;;
+    --codex-config)
+      CODEX_CONFIG_MODE="yes"
+      shift
+      ;;
+    --no-codex-config)
+      CODEX_CONFIG_MODE="no"
+      shift
       ;;
     -h|--help)
       usage
@@ -428,20 +437,34 @@ case ":$PATH:" in
 esac
 write_plist
 
-if [[ "$DRY_RUN" -eq 1 ]]; then
-  say "dry-run: would ask before editing Codex config"
-else
-  printf 'Add Codex voice protocol to ~/.codex/AGENTS.md? [y/N] '
-  read -r answer || answer=""
-  case "$answer" in
-    y|Y|yes|YES)
-      install_codex_block
-      ;;
-    *)
-      say "Skipped Codex config update"
-      ;;
-  esac
-fi
+case "$CODEX_CONFIG_MODE" in
+  yes|YES|true|TRUE|1)
+    install_codex_block
+    ;;
+  no|NO|false|FALSE|0)
+    say "Skipped Codex config update"
+    ;;
+  ask|"")
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      say "dry-run: would ask before editing Codex config"
+    else
+      printf 'Add Codex voice protocol to ~/.codex/AGENTS.md? [y/N] '
+      read -r answer || answer=""
+      case "$answer" in
+        y|Y|yes|YES)
+          install_codex_block
+          ;;
+        *)
+          say "Skipped Codex config update"
+          ;;
+      esac
+    fi
+    ;;
+  *)
+    echo "Invalid AGENT_VOICE_INSTALL_CODEX_CONFIG value: $CODEX_CONFIG_MODE" >&2
+    exit 2
+    ;;
+esac
 
 remove_legacy_artifacts
 

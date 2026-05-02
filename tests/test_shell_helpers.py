@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import textwrap
 from pathlib import Path
 
 from tests.helpers.public_contract import MockSpeechServer, make_fake_bin, require_executable, run_with_home
@@ -187,3 +190,69 @@ def test_agent_voice_summary_rejects_invalid_playback_timeout(tmp_path: Path) ->
 
     assert result.returncode == 2
     assert "Playback timeout" in result.stderr
+
+
+def _make_git_source_with_installer(tmp_path: Path) -> Path:
+    source = tmp_path / "source"
+    source.mkdir()
+    installer = source / "install.sh"
+    installer.write_text(
+        textwrap.dedent(
+            """
+            #!/usr/bin/env bash
+            set -euo pipefail
+            mkdir -p "$AGENT_VOICE_HOME"
+            printf '%s\n' "$@" > "$AGENT_VOICE_HOME/install-args.txt"
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    installer.chmod(0o755)
+    subprocess.run(["git", "init"], cwd=source, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=source, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=source, check=True)
+    subprocess.run(["git", "add", "install.sh"], cwd=source, check=True)
+    subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "commit", "-m", "initial"],
+        cwd=source,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return source
+
+
+def test_sync_installed_records_manifest_and_uses_noninteractive_install(tmp_path: Path) -> None:
+    helper = require_executable("sync-installed")
+    source = _make_git_source_with_installer(tmp_path)
+    state = tmp_path / "state"
+
+    result = subprocess.run(
+        [str(helper), "--source-dir", str(source), "--state-dir", str(state), "--no-verify"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--no-codex-config" in (state / "install-args.txt").read_text(encoding="utf-8")
+    manifest = json.loads((state / "install-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["repo"] == str(source)
+    assert manifest["commit"] == subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    assert manifest["dirty"] is False
+
+
+def test_sync_installed_refuses_dirty_source_without_override(tmp_path: Path) -> None:
+    helper = require_executable("sync-installed")
+    source = _make_git_source_with_installer(tmp_path)
+    (source / "install.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [str(helper), "--source-dir", str(source), "--state-dir", str(tmp_path / "state"), "--no-verify"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode == 1
+    assert "source tree is dirty" in result.stderr

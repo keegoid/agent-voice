@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# Sync the checked-out agent-voice source tree into the local launchd install.
+
+set -euo pipefail
+
+DEFAULT_STATE_DIR="$HOME/.agent-voice"
+STATE_DIR="${AGENT_VOICE_HOME:-$DEFAULT_STATE_DIR}"
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DRY_RUN=0
+ALLOW_DIRTY=0
+VERIFY=1
+RUN_TESTS=0
+TEST_COMMAND="uv run pytest -q"
+FROM_REF=""
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/sync-installed [options]
+
+Options:
+  --source-dir PATH      Source checkout to install from (default: this repo)
+  --state-dir PATH       Installed state dir (default: ~/.agent-voice)
+  --from REF             Require HEAD to equal REF before syncing
+  --allow-dirty          Allow installing from a dirty source tree
+  --test                 Run the default test command before installing
+  --test-command CMD     Command used by --test (default: uv run pytest -q)
+  --no-verify            Skip /v1/health verification after install
+  --dry-run              Print actions without modifying installed files
+USAGE
+}
+
+die() {
+  printf 'sync-installed: %s\n' "$*" >&2
+  exit 1
+}
+
+say() {
+  printf '%s\n' "$*"
+}
+
+run() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf 'dry-run:'
+    printf ' %q' "$@"
+    printf '\n'
+  else
+    "$@"
+  fi
+}
+
+verify_health() {
+  local attempt
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    if curl -fsS http://127.0.0.1:8880/v1/health >/dev/null; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+json_manifest() {
+  local target="$1"
+  local repo="$2"
+  local branch="$3"
+  local commit="$4"
+  local dirty="$5"
+  python3 - "$target" "$repo" "$branch" "$commit" "$dirty" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+target, repo, branch, commit, dirty = sys.argv[1:]
+payload = {
+    "repo": repo,
+    "branch": branch,
+    "commit": commit,
+    "dirty": dirty == "1",
+    "synced_at": datetime.now(timezone.utc).isoformat(),
+}
+path = Path(target)
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --source-dir)
+      [[ $# -ge 2 ]] || die "missing value for $1"
+      SOURCE_DIR="$2"
+      shift 2
+      ;;
+    --state-dir)
+      [[ $# -ge 2 ]] || die "missing value for $1"
+      STATE_DIR="$2"
+      shift 2
+      ;;
+    --from)
+      [[ $# -ge 2 ]] || die "missing value for $1"
+      FROM_REF="$2"
+      shift 2
+      ;;
+    --allow-dirty)
+      ALLOW_DIRTY=1
+      shift
+      ;;
+    --test)
+      RUN_TESTS=1
+      shift
+      ;;
+    --test-command)
+      [[ $# -ge 2 ]] || die "missing value for $1"
+      TEST_COMMAND="$2"
+      shift 2
+      ;;
+    --no-verify)
+      VERIFY=0
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown option: $1"
+      ;;
+  esac
+done
+
+SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
+[[ -d "$SOURCE_DIR/.git" || -f "$SOURCE_DIR/.git" ]] || die "source is not a git repo: $SOURCE_DIR"
+[[ -x "$SOURCE_DIR/install.sh" ]] || die "source missing executable install.sh: $SOURCE_DIR"
+
+branch="$(git -C "$SOURCE_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || printf 'DETACHED')"
+commit="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+dirty_status="$(git -C "$SOURCE_DIR" status --porcelain=v1)"
+dirty=0
+if [[ -n "$dirty_status" ]]; then
+  dirty=1
+fi
+
+if [[ -n "$FROM_REF" ]]; then
+  expected="$(git -C "$SOURCE_DIR" rev-parse "$FROM_REF")"
+  [[ "$commit" == "$expected" ]] || die "HEAD $commit does not match --from $FROM_REF ($expected)"
+fi
+
+if [[ "$dirty" -eq 1 && "$ALLOW_DIRTY" -ne 1 ]]; then
+  printf '%s\n' "$dirty_status" >&2
+  die "source tree is dirty; commit first or pass --allow-dirty"
+fi
+
+if [[ "$RUN_TESTS" -eq 1 ]]; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    say "dry-run: (cd $(printf '%q' "$SOURCE_DIR") && $TEST_COMMAND)"
+  else
+    (cd "$SOURCE_DIR" && bash -lc "$TEST_COMMAND")
+  fi
+fi
+
+say "Syncing agent-voice install from $branch@$commit"
+run env AGENT_VOICE_HOME="$STATE_DIR" "$SOURCE_DIR/install.sh" --source-dir "$SOURCE_DIR" --no-codex-config
+
+manifest="$STATE_DIR/install-manifest.json"
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  say "dry-run: write manifest $manifest"
+else
+  json_manifest "$manifest" "$SOURCE_DIR" "$branch" "$commit" "$dirty"
+fi
+
+if [[ "$VERIFY" -eq 1 ]]; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    say "dry-run: skip health verification"
+  else
+    verify_health || die "health verification failed for http://127.0.0.1:8880/v1/health"
+  fi
+fi
+
+say "agent-voice install synced"
+say "Manifest: $manifest"
