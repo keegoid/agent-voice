@@ -26,6 +26,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from . import mute_state
 from .voices import VOICE_DESIGNS
 
 TTS_MODEL_ID = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
@@ -119,6 +120,10 @@ class RequestPayload(BaseModel):
     language: str = "English"
     instruct: str | None = Field(default=None, max_length=4000)
     max_tokens: int | None = Field(default=None, ge=1, le=TTS_REQUEST_MAX_TOKENS_LIMIT)
+
+
+class MutePayload(BaseModel):
+    muted: bool
 
 
 def get_tts_model():
@@ -224,25 +229,25 @@ def generate_audio(
         sample_rate = 24000
         output_sample_rate: int | None = None
 
-        for index, segment in enumerate(segments):
-            audio, sample_rate = _generate_audio_segment(
+        for segment in segments:
+            for audio, sample_rate in _generate_audio_parts_for_segment(
                 model=model,
                 text=segment,
                 instruct=instruct,
                 language=language,
                 max_tokens=max_tokens,
-            )
-            if audio.size == 0:
-                continue
-            if output_sample_rate is None:
-                output_sample_rate = sample_rate
-            elif sample_rate != output_sample_rate:
-                raise RuntimeError(
-                    f"TTS segments returned inconsistent sample rates: {output_sample_rate} and {sample_rate}"
-                )
-            if chunks and index > 0:
-                chunks.append(np.zeros(int(sample_rate * TTS_SEGMENT_SILENCE_SECONDS), dtype=audio.dtype))
-            chunks.append(audio)
+            ):
+                if audio.size == 0:
+                    continue
+                if output_sample_rate is None:
+                    output_sample_rate = sample_rate
+                elif sample_rate != output_sample_rate:
+                    raise RuntimeError(
+                        f"TTS segments returned inconsistent sample rates: {output_sample_rate} and {sample_rate}"
+                    )
+                if chunks:
+                    chunks.append(np.zeros(int(sample_rate * TTS_SEGMENT_SILENCE_SECONDS), dtype=audio.dtype))
+                chunks.append(audio)
 
         if not chunks:
             return b""
@@ -272,6 +277,11 @@ def _encode_audio(audio: np.ndarray, sample_rate: int, response_format: str) -> 
     output = io.BytesIO()
     sf.write(output, audio, sample_rate, format="WAV")
     return _convert_wav_bytes(output.getvalue(), normalized)
+
+
+def _muted_audio(response_format: str) -> bytes:
+    samples = np.zeros(int(24000 * 0.25), dtype=np.float32)
+    return _encode_audio(samples, 24000, response_format)
 
 
 def _convert_wav_bytes(wav_bytes: bytes, response_format: str) -> bytes:
@@ -334,6 +344,7 @@ def _generate_audio_segment(
             max_tokens=max_tokens,
             attempt=attempt,
         )
+        audio = _trim_trailing_inactive_audio(audio, sample_rate)
         activity = _audio_activity(audio, sample_rate)
         if activity.active_seconds > best_active_seconds or (
             activity.active_seconds == best_active_seconds and audio.size > best_audio.size
@@ -354,6 +365,44 @@ def _generate_audio_segment(
             )
 
     return best_audio, best_sample_rate
+
+
+def _generate_audio_parts_for_segment(
+    model: Any,
+    text: str,
+    instruct: str,
+    language: str,
+    max_tokens: int,
+) -> list[tuple[np.ndarray, int]]:
+    audio, sample_rate = _generate_audio_segment(
+        model=model,
+        text=text,
+        instruct=instruct,
+        language=language,
+        max_tokens=max_tokens,
+    )
+    if not _is_suspiciously_short_audio(text, audio, sample_rate):
+        return [(audio, sample_rate)]
+
+    fallback_segments = _split_speech_text_at_sentence_boundaries(text, TTS_MAX_SEGMENT_CHARS)
+    if len(fallback_segments) <= 1:
+        return [(audio, sample_rate)]
+
+    print(
+        "Falling back to sentence-level TTS after collapsed continuous segment "
+        f"(words={_word_count(text)}, segments={len(fallback_segments)})",
+        file=sys.stderr,
+    )
+    return [
+        _generate_audio_segment(
+            model=model,
+            text=fallback_segment,
+            instruct=instruct,
+            language=language,
+            max_tokens=max_tokens,
+        )
+        for fallback_segment in fallback_segments
+    ]
 
 
 def _generate_audio_segment_once(
@@ -396,7 +445,7 @@ def _split_speech_text(text: str, max_segment_chars: int) -> list[str]:
 
     segments: list[str] = []
     current = ""
-    for sentence in re.split(r"(?<=[.!?;:])\s+", text):
+    for sentence in _split_speech_text_at_sentence_boundaries(text, max_segment_chars):
         if not sentence:
             continue
         if len(sentence) > max_segment_chars:
@@ -413,6 +462,18 @@ def _split_speech_text(text: str, max_segment_chars: int) -> list[str]:
             current = candidate
     if current:
         segments.append(current)
+    return segments or [text]
+
+
+def _split_speech_text_at_sentence_boundaries(text: str, max_segment_chars: int) -> list[str]:
+    segments: list[str] = []
+    for sentence in re.split(r"(?<=[.!?;:])\s+", text):
+        if not sentence:
+            continue
+        if max_segment_chars > 0 and len(sentence) > max_segment_chars:
+            segments.extend(_split_long_speech_piece(sentence, max_segment_chars))
+        else:
+            segments.append(sentence)
     return segments or [text]
 
 
@@ -453,6 +514,24 @@ def _is_suspiciously_short_audio(text: str, audio: np.ndarray, sample_rate: int)
         words / TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND,
     )
     return activity.active_seconds < min_reasonable_seconds
+
+
+def _trim_trailing_inactive_audio(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    if sample_rate <= 0 or audio.size == 0:
+        return audio
+    activity = _audio_activity(audio, sample_rate)
+    if activity.active_end_seconds <= 0:
+        return audio
+
+    keep_seconds = min(
+        activity.duration_seconds,
+        activity.active_end_seconds + TTS_SEGMENT_SILENCE_SECONDS,
+    )
+    if activity.duration_seconds - keep_seconds <= TTS_ACTIVITY_MAX_SILENT_GAP_SECONDS:
+        return audio
+
+    keep_samples = max(1, int(keep_seconds * sample_rate))
+    return np.asarray(audio)[:keep_samples]
 
 
 def _audio_activity(audio: np.ndarray, sample_rate: int) -> AudioActivity:
@@ -621,6 +700,7 @@ async def _read_upload_limited(file: UploadFile, max_bytes: int) -> bytes:
 def health() -> dict[str, object]:
     return {
         "status": "ok",
+        "muted": mute_state.is_muted(),
         "model": "qwen3-tts",
         "tts_model_id": TTS_MODEL_ID,
         "tts_max_tokens": TTS_MAX_TOKENS,
@@ -628,6 +708,27 @@ def health() -> dict[str, object]:
         "stt_processor_id": STT_PROCESSOR_ID,
         "voices": list(VOICE_DESIGNS.keys()),
     }
+
+
+@app.get("/v1/mute")
+def get_mute() -> dict[str, object]:
+    return mute_state.read_state()
+
+
+@app.post("/v1/mute")
+def set_mute(request: MutePayload) -> dict[str, object]:
+    try:
+        return mute_state.set_muted(request.muted)
+    except mute_state.MuteStateLockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/v1/mute/toggle")
+def toggle_mute() -> dict[str, object]:
+    try:
+        return mute_state.toggle_muted()
+    except mute_state.MuteStateLockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/v1/audio/speech")
@@ -640,6 +741,17 @@ def audio_speech(request: RequestPayload) -> Response:
     text = request.input.strip()
     if not text:
         raise HTTPException(status_code=400, detail="input must not be empty")
+
+    if mute_state.is_muted():
+        try:
+            audio = _muted_audio(response_format)
+        except AudioFormatError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return Response(
+            content=audio,
+            media_type=TTS_RESPONSE_FORMATS[response_format]["media_type"],
+            headers={"X-Agent-Voice-Muted": "true", "X-Generation-Time": "0.000"},
+        )
 
     custom_instruct = request.instruct.strip() if request.instruct else ""
     voice_design = custom_instruct or VOICE_DESIGNS.get(request.voice)

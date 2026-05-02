@@ -18,8 +18,17 @@ default.
 
 - `GET /v1/health`
   - returns JSON with `status: "ok"`, the configured TTS and STT model ids, and
-    the configured STT processor id and available public voice names.
+    the configured STT processor id, current `muted` state, and available
+    public voice names.
   - must not load either model just to report health.
+- `GET /v1/mute`
+  - returns the persistent master mute state.
+- `POST /v1/mute`
+  - accepts JSON `{ "muted": true|false }` and persists the master mute state
+    under `AGENT_VOICE_HOME` unless `AGENT_VOICE_MUTE_STATE` overrides the
+    path.
+- `POST /v1/mute/toggle`
+  - flips and persists the master mute state.
 - `POST /v1/audio/speech`
   - accepts JSON fields:
     - `model`, default `qwen3-tts`
@@ -34,6 +43,8 @@ default.
   - supports `response_format` values `wav`, `mp3`, `opus`, and `flac`.
     MP3 and Opus output require `ffmpeg`; WAV and FLAC do not.
   - rejects other `response_format` values with HTTP 400.
+  - when master mute is enabled, returns valid silent audio for the requested
+    response format without loading or calling the TTS model.
   - does not impose a request character cap. Long requests may be split into
     multiple synthesis segments server-side and concatenated into one response
     audio file.
@@ -95,6 +106,8 @@ Public voice names are:
 - checks `curl`, `jq`, and `afplay` when playback is enabled.
 - calls `/v1/health`, validates the requested voice, and sends a JSON request
   to `/v1/audio/speech`.
+- exits successfully without generating or playing audio when `/v1/health`
+  reports `muted: true`.
 - supports `--voice`, `--server`, `--output`, `--play-timeout`, `--no-play`,
   and `--help`.
 - bounds `afplay` runtime with a duration-aware timeout by default. The
@@ -134,6 +147,10 @@ The installed `agent-voice` command supports:
 - `agent-voice stop`
 - `agent-voice restart`
 - `agent-voice logs`
+- `agent-voice mute`
+- `agent-voice mute status`
+- `agent-voice mute toggle`
+- `agent-voice unmute`
 - `agent-voice configure hermes`
 - `agent-voice restore`
 - `agent-voice restore --list`

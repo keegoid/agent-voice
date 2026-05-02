@@ -48,6 +48,8 @@ Commands:
   stop
   restart
   logs
+  mute [status|on|off|toggle]
+  unmute
   configure hermes [--dry-run] [--restart-gateway] [--server URL] [--voice NAME]
   restore [--list|--backup <id>]
   uninstall [--destroy-caches]
@@ -240,6 +242,22 @@ case "$cmd" in
     ;;
   logs)
     tail -n 120 -f "$STATE_DIR/logs/server.log" "$STATE_DIR/logs/server.err.log"
+    ;;
+  mute)
+    shift
+    action="${1:-on}"
+    case "$action" in
+      status|on|off|toggle)
+        run_python_module "agent_voice.mute_state" "$action"
+        ;;
+      *)
+        echo "Usage: agent-voice mute [status|on|off|toggle]" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  unmute)
+    run_python_module "agent_voice.mute_state" off
     ;;
   configure)
     shift

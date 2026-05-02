@@ -103,6 +103,10 @@ agent-voice start
 agent-voice stop
 agent-voice restart
 agent-voice logs
+agent-voice mute
+agent-voice mute status
+agent-voice mute toggle
+agent-voice unmute
 agent-voice configure hermes
 agent-voice restore --list
 agent-voice restore
@@ -112,6 +116,9 @@ agent-voice uninstall
 
 `agent-speak "message"` is intentionally safe: if the server is offline, it
 logs and exits successfully so the calling task can continue.
+`agent-voice mute` is a persistent master mute for local speech generation.
+While muted, `/v1/audio/speech` returns valid silent audio without loading the
+TTS model, and `agent-voice-summary` exits before generating or playing audio.
 Use `AGENT_VOICE_*` environment variables for configuration.
 Playback is bounded separately from generation: `agent-voice-summary` defaults
 to a playback timeout based on the generated WAV duration plus grace, and
@@ -127,6 +134,16 @@ Health:
 
 ```bash
 curl -fsS http://127.0.0.1:8880/v1/health
+```
+
+Mute state:
+
+```bash
+curl -fsS http://127.0.0.1:8880/v1/mute
+curl -fsS http://127.0.0.1:8880/v1/mute \
+  -H 'Content-Type: application/json' \
+  -d '{"muted":true}'
+curl -fsS -X POST http://127.0.0.1:8880/v1/mute/toggle
 ```
 
 Speech:

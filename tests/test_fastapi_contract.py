@@ -42,11 +42,76 @@ def test_health_reports_status_model_and_public_voices_without_generation(monkey
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
+    assert data["muted"] is False
     assert _json_response_field(data, "model", "model_id", "tts_model_id")
     assert data["stt_model_id"]
     assert data["stt_processor_id"]
     voices = set(_json_response_field(data, "voices", "available_voices", "public_voices"))
     assert PUBLIC_VOICES <= voices
+
+
+def test_mute_endpoints_persist_state(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.delenv("AGENT_VOICE_MUTED", raising=False)
+    client = TestClient(locate_fastapi_app())
+
+    assert client.get("/v1/mute").json()["muted"] is False
+
+    enabled = client.post("/v1/mute", json={"muted": True})
+    assert enabled.status_code == 200
+    assert enabled.json()["muted"] is True
+    assert json.loads((tmp_path / "mute.json").read_text(encoding="utf-8"))["muted"] is True
+
+    toggled = client.post("/v1/mute/toggle")
+    assert toggled.status_code == 200
+    assert toggled.json()["muted"] is False
+
+
+def test_mute_endpoints_reject_writes_when_env_override_is_set(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = tmp_path / "mute.json"
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(state))
+    monkeypatch.setenv("AGENT_VOICE_MUTED", "true")
+    client = TestClient(locate_fastapi_app())
+
+    assert client.get("/v1/mute").json()["source"] == "env"
+
+    direct = client.post("/v1/mute", json={"muted": False})
+    toggled = client.post("/v1/mute/toggle")
+
+    assert direct.status_code == 409
+    assert toggled.status_code == 409
+    assert not state.exists()
+
+
+def test_speech_returns_silence_without_generation_when_muted(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.delenv("AGENT_VOICE_MUTED", raising=False)
+    server.mute_state.set_muted(True, source="test")
+
+    def fail_if_generated(*_args: Any, **_kwargs: Any) -> bytes:
+        raise AssertionError("muted speech must not generate model audio")
+
+    monkeypatch.setattr(server, "generate_audio", fail_if_generated)
+    client = TestClient(locate_fastapi_app())
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={"input": "hello", "voice": "not_a_public_voice", "response_format": "wav"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-agent-voice-muted"] == "true"
+    with wave.open(io.BytesIO(response.content), "rb") as wav:
+        assert wav.getnframes() > 0
+        assert wav.getframerate() == 24000
 
 
 def test_speech_rejects_unknown_voice_without_instruct() -> None:
@@ -421,6 +486,106 @@ def test_split_speech_text_bounds_single_long_word() -> None:
     segments = server._split_speech_text("x" * 2505, 1000)
 
     assert [len(segment) for segment in segments] == [1000, 1000, 505]
+
+
+def test_split_speech_text_keeps_short_multi_sentence_text_together() -> None:
+    import agent_voice.server as server
+
+    segments = server._split_speech_text(
+        "First sentence should synthesize alone. Second sentence should not inherit its noise tail.",
+        1200,
+    )
+
+    assert segments == [
+        "First sentence should synthesize alone. Second sentence should not inherit its noise tail.",
+    ]
+
+
+def test_generate_audio_uses_continuous_generation_for_short_multi_sentence_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    seen_texts: list[str] = []
+    sample_rate = 24000
+
+    class FakeResult:
+        sample_rate = 24000
+        token_count = 100
+
+        def __init__(self, audio: Any) -> None:
+            self.audio = audio
+
+    class FakeModel:
+        def generate_voice_design(self, **kwargs: Any) -> list[FakeResult]:
+            seen_texts.append(kwargs["text"])
+            return [FakeResult(server.np.full(sample_rate * 5, 0.1, dtype=server.np.float32))]
+
+    text = "First sentence should stay in one voice. Second sentence should share that voice."
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+
+    audio = server.generate_audio(
+        text=text,
+        instruct="clear voice",
+        language="English",
+        response_format="wav",
+        max_tokens=123,
+    )
+
+    assert audio.startswith(b"RIFF")
+    assert seen_texts == [text]
+
+
+def test_generate_audio_falls_back_to_sentences_only_after_continuous_collapse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    seen_texts: list[str] = []
+    sample_rate = 24000
+    text = "First sentence should synthesize cleanly. Second sentence should also synthesize cleanly."
+
+    class FakeResult:
+        sample_rate = 24000
+        token_count = 100
+
+        def __init__(self, audio: Any) -> None:
+            self.audio = audio
+
+    class FakeModel:
+        def generate_voice_design(self, **kwargs: Any) -> list[FakeResult]:
+            seen_texts.append(kwargs["text"])
+            if kwargs["text"] == text:
+                collapsed = server.np.concatenate(
+                    [
+                        server.np.full(sample_rate // 2, 0.1, dtype=server.np.float32),
+                        server.np.zeros(sample_rate * 10, dtype=server.np.float32),
+                    ]
+                )
+                return [FakeResult(collapsed)]
+            return [FakeResult(server.np.full(sample_rate * 2, 0.1, dtype=server.np.float32))]
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+    monkeypatch.setattr(server, "TTS_GENERATION_ATTEMPTS", 2)
+
+    audio = server.generate_audio(
+        text=text,
+        instruct="clear voice",
+        language="English",
+        response_format="wav",
+        max_tokens=123,
+    )
+
+    with wave.open(io.BytesIO(audio), "rb") as wav:
+        duration = wav.getnframes() / wav.getframerate()
+
+    assert seen_texts == [
+        text,
+        text,
+        "First sentence should synthesize cleanly.",
+        "Second sentence should also synthesize cleanly.",
+    ]
+    assert duration == pytest.approx(4.18)
 
 
 def test_speech_rejects_unsupported_response_format() -> None:
