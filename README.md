@@ -116,6 +116,10 @@ agent-voice uninstall
 
 `agent-speak "message"` is intentionally safe: if the server is offline, it
 logs and exits successfully so the calling task can continue.
+When `agent-speak` runs inside Paperclip with `PAPERCLIP_*` runtime variables,
+it prepends a concise speaker label such as `DEV CEO` or `DEV keegoid-codex`
+to the spoken text. Set `AGENT_VOICE_SPEAKER_LABEL` to override that label, or
+`AGENT_VOICE_SPEAKER_LABEL_ENABLED=0` to disable prefixing.
 `agent-voice mute` is a persistent master mute for local speech generation.
 While muted, `/v1/audio/speech` returns valid silent audio without loading the
 TTS model, and `agent-voice-summary` exits before generating or playing audio.
