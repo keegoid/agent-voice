@@ -110,7 +110,7 @@ def test_notify_endpoint_accepts_legacy_payload_and_plays_voice(
         "/notify",
         json={
             "title": "PAI **Done**",
-            "message": "PAI finished `task`;\n\ncost is $5 | grep.",
+            "message": "PAI finished `task`;\n\ncost is $5 | grep; see foo/../bar.",
             "voice_id": "cyberpunk_cool",
         },
     )
@@ -120,8 +120,8 @@ def test_notify_endpoint_accepts_legacy_payload_and_plays_voice(
     assert data["status"] == "success"
     assert data["voice_played"] is True
     assert data["voice"] == "cyberpunk_cool"
-    assert seen["desktop"] == ("PAI Done", "PAI finished task; cost is $5 | grep.")
-    assert seen["generation"]["text"] == "PAI finished task;\n\ncost is $5 | grep."
+    assert seen["desktop"] == ("PAI Done", "PAI finished task; cost is $5 | grep; see foo/../bar.")
+    assert seen["generation"]["text"] == "PAI finished task;\n\ncost is $5 | grep; see foo/../bar."
     assert seen["generation"]["instruct"] == server.VOICE_DESIGNS["cyberpunk_cool"]
     assert seen["played"] == b"RIFFfakeWAVEfmt "
 

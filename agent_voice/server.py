@@ -840,7 +840,6 @@ def _sanitize_notify_text(value: str, field: str, *, preserve_pauses: bool = Fal
     if not preserve_pauses:
         sanitized = sanitized.replace("\n", " ")
     sanitized = re.sub(r"<script", "", sanitized, flags=re.IGNORECASE)
-    sanitized = sanitized.replace("../", "")
     sanitized = re.sub(r"\*\*([^*]+)\*\*", r"\1", sanitized)
     sanitized = re.sub(r"\*([^*]+)\*", r"\1", sanitized)
     sanitized = re.sub(r"`([^`]+)`", r"\1", sanitized)
