@@ -136,6 +136,43 @@ Health:
 curl -fsS http://127.0.0.1:8880/v1/health
 ```
 
+PAI-compatible desktop notification and playback:
+
+```bash
+curl -fsS http://127.0.0.1:8880/notify \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"PAI Notification","message":"The agent finished the task.","voice_id":"cyberpunk_cool","voice_enabled":true}'
+```
+
+Compatibility aliases are also available at `/notify/personality` and `/pai`.
+These endpoints display a macOS desktop notification, then generate WAV speech
+with the same Qwen3 runtime and play it locally with `afplay`. They preserve old
+PAI notification payload fields: `title`, `message`, `voice_id`, `voice_name`,
+`voice_enabled`, optional `instruct`, and `language`. Unknown old voice ids fall
+back to the configured default voice unless a custom `instruct` is supplied.
+Pronunciation replacements are loaded from
+`~/.agent-voice/pronunciations.json`, or from `AGENT_VOICE_PRONUNCIATIONS_PATH`
+when set:
+
+```json
+{
+  "replacements": [
+    { "term": "PAI", "phonetic": "pie" },
+    { "term": "ISC", "phonetic": "I S C" }
+  ]
+}
+```
+
+Notify playback is serialized and bounded by
+`AGENT_VOICE_NOTIFY_QUEUE_MAX_DEPTH=3` by default. Tune defaults with
+`AGENT_VOICE_NOTIFY_DEFAULT_VOICE`, `AGENT_VOICE_NOTIFY_DESKTOP`,
+`AGENT_VOICE_NOTIFY_RATE_LIMIT`, and `AGENT_VOICE_NOTIFY_PLAYBACK_TIMEOUT_SECONDS`.
+If a trusted local proxy fronts the loopback service, set
+`AGENT_VOICE_NOTIFY_TRUST_XFF=1` to rate-limit by `X-Forwarded-For`.
+`AGENT_VOICE_NOTIFY_RATE_CLIENT_LIMIT=256` bounds the number of remembered
+clients inside each rate-limit window. Trusted forwarded headers use the
+left-most valid IP; malformed values fall back to the direct client address.
+
 Mute state:
 
 ```bash

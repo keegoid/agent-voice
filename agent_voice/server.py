@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import inspect
+import ipaddress
 import json
 import logging
 import os
@@ -15,15 +16,17 @@ import tempfile
 import threading
 import time
 import warnings
+import wave
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import soundfile as sf
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from . import mute_state
@@ -65,6 +68,17 @@ TTS_RESPONSE_FORMATS = {
     "opus": {"container": "ogg", "media_type": "audio/ogg"},
     "flac": {"container": "flac", "media_type": "audio/flac"},
 }
+NOTIFY_DEFAULT_TITLE = os.getenv("AGENT_VOICE_NOTIFY_DEFAULT_TITLE") or "PAI Notification"
+NOTIFY_DEFAULT_MESSAGE = os.getenv("AGENT_VOICE_NOTIFY_DEFAULT_MESSAGE") or "Task completed"
+NOTIFY_MAX_CHARS = int(os.getenv("AGENT_VOICE_NOTIFY_MAX_CHARS") or "1000")
+NOTIFY_RATE_LIMIT = int(os.getenv("AGENT_VOICE_NOTIFY_RATE_LIMIT") or "10")
+NOTIFY_RATE_WINDOW_SECONDS = float(os.getenv("AGENT_VOICE_NOTIFY_RATE_WINDOW_SECONDS") or "60")
+NOTIFY_RATE_CLIENT_LIMIT = int(os.getenv("AGENT_VOICE_NOTIFY_RATE_CLIENT_LIMIT") or "256")
+NOTIFY_QUEUE_MAX_DEPTH = int(os.getenv("AGENT_VOICE_NOTIFY_QUEUE_MAX_DEPTH") or "3")
+NOTIFY_PLAYBACK_TIMEOUT_SECONDS = float(os.getenv("AGENT_VOICE_NOTIFY_PLAYBACK_TIMEOUT_SECONDS") or "0")
+NOTIFY_PLAYBACK_GRACE_SECONDS = float(os.getenv("AGENT_VOICE_NOTIFY_PLAYBACK_GRACE_SECONDS") or "2")
+NOTIFY_OSASCRIPT_TIMEOUT_SECONDS = float(os.getenv("AGENT_VOICE_NOTIFY_OSASCRIPT_TIMEOUT_SECONDS") or "5")
+NOTIFY_DEFAULT_CORS_ORIGIN = "http://localhost"
 
 app = FastAPI(title="agent-voice", version="0.2.1")
 _tts_model = None
@@ -73,7 +87,15 @@ _tts_model_lock = threading.Lock()
 _tts_generation_lock = threading.Lock()
 _stt_model_lock = threading.Lock()
 _dropped_stt_options_lock = threading.Lock()
+_notify_rate_lock = threading.Lock()
+_notify_queue_lock = threading.Lock()
+_notify_playback_lock = threading.Lock()
+_pronunciation_cache_lock = threading.Lock()
 _logged_dropped_stt_options: set[tuple[str, ...]] = set()
+_notify_request_counts: dict[str, tuple[int, float]] = {}
+_notify_queue_depth = 0
+_pronunciation_cache_key: tuple[str, int, int] | None = None
+_pronunciation_cache_rules: list[tuple[re.Pattern[str], str]] = []
 _QWEN_TRANSFORMERS_CONFIG_WARNING = (
     "You are using a model of type `qwen3_tts` to instantiate a model of type ``."
 )
@@ -131,6 +153,20 @@ class RequestPayload(BaseModel):
 
 class MutePayload(BaseModel):
     muted: bool
+
+
+class NotifyPayload(BaseModel):
+    title: str | None = None
+    message: str | None = None
+    voice_enabled: bool = True
+    voice_id: str | None = Field(default=None, max_length=200)
+    voice_name: str | None = Field(default=None, max_length=200)
+    instruct: str | None = Field(default=None, max_length=4000)
+    language: str = "English"
+
+
+class VoiceQueueFullError(RuntimeError):
+    """Raised when queued local playback would pile up stale notifications."""
 
 
 def get_tts_model():
@@ -721,6 +757,398 @@ async def _read_upload_limited(file: UploadFile, max_bytes: int) -> bytes:
             raise HTTPException(status_code=413, detail="file is too large")
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _notify_default_voice() -> str:
+    configured = os.getenv("AGENT_VOICE_NOTIFY_DEFAULT_VOICE") or "cyberpunk_cool"
+    return configured if configured in VOICE_DESIGNS else "cyberpunk_cool"
+
+
+def _notify_state_dir() -> Path:
+    return Path(os.environ.get("AGENT_VOICE_HOME") or Path.home() / ".agent-voice").expanduser()
+
+
+def _notify_pronunciations_path() -> Path:
+    configured = os.getenv("AGENT_VOICE_PRONUNCIATIONS_PATH")
+    if configured:
+        return Path(configured).expanduser()
+    return _notify_state_dir() / "pronunciations.json"
+
+
+def _load_pronunciation_rules() -> list[tuple[re.Pattern[str], str]]:
+    global _pronunciation_cache_key, _pronunciation_cache_rules
+
+    path = _notify_pronunciations_path()
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        print(f"Failed to stat pronunciation rules from {path}: {exc}", file=sys.stderr)
+        return []
+
+    cache_key = (str(path), stat.st_mtime_ns, stat.st_size)
+    with _pronunciation_cache_lock:
+        if cache_key == _pronunciation_cache_key:
+            return list(_pronunciation_cache_rules)
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"Failed to load pronunciation rules from {path}: {exc}", file=sys.stderr)
+        return []
+
+    replacements = data.get("replacements") if isinstance(data, dict) else None
+    if not isinstance(replacements, list):
+        return []
+
+    rules: list[tuple[re.Pattern[str], str]] = []
+    for item in replacements:
+        if not isinstance(item, dict):
+            continue
+        term = item.get("term")
+        phonetic = item.get("phonetic")
+        if not isinstance(term, str) or not term or not isinstance(phonetic, str):
+            continue
+        rules.append((re.compile(rf"(?<!\w){re.escape(term)}(?!\w)"), phonetic))
+    with _pronunciation_cache_lock:
+        _pronunciation_cache_key = cache_key
+        _pronunciation_cache_rules = list(rules)
+    return rules
+
+
+def _apply_pronunciations(text: str) -> str:
+    result = text
+    for pattern, phonetic in _load_pronunciation_rules():
+        result = pattern.sub(phonetic, result)
+    return result
+
+
+def _sanitize_notify_text(value: str, field: str, *, preserve_pauses: bool = False) -> str:
+    if len(value) > NOTIFY_MAX_CHARS:
+        raise HTTPException(status_code=400, detail=f"{field} too long (max {NOTIFY_MAX_CHARS} characters)")
+    # Keep markdown/control cleanup shared by the desktop banner and speech.
+    # AppleScript-specific safety is handled later by _escape_for_applescript.
+    sanitized = value.replace("\r\n", "\n").replace("\r", "\n")
+    if not preserve_pauses:
+        sanitized = sanitized.replace("\n", " ")
+    sanitized = re.sub(r"<script", "", sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r"\*\*([^*]+)\*\*", r"\1", sanitized)
+    sanitized = re.sub(r"\*([^*]+)\*", r"\1", sanitized)
+    sanitized = re.sub(r"`([^`]+)`", r"\1", sanitized)
+    sanitized = re.sub(r"#{1,6}\s+", "", sanitized)
+    if preserve_pauses:
+        sanitized = re.sub(r"[ \t\f\v]+", " ", sanitized)
+        sanitized = re.sub(r" *\n *", "\n", sanitized)
+        sanitized = re.sub(r"\n{3,}", "\n\n", sanitized)
+    else:
+        sanitized = re.sub(r"\s+", " ", sanitized)
+    sanitized = sanitized.strip()
+    if not sanitized:
+        raise HTTPException(status_code=400, detail=f"{field} contains no valid content after sanitization")
+    return sanitized[:NOTIFY_MAX_CHARS]
+
+
+def _escape_for_applescript(value: str) -> str:
+    value = re.sub(r"[\x00-\x1f\x7f]", " ", value)
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _notify_client_id(request: Request) -> str:
+    # The service binds to loopback by default. Only trust proxy-supplied client
+    # identity when a local deployment explicitly opts into that proxy contract.
+    direct_client = request.client.host if request.client else "localhost"
+    forwarded_for = (
+        request.headers.get("x-forwarded-for") if _env_flag("AGENT_VOICE_NOTIFY_TRUST_XFF", False) else None
+    )
+    if forwarded_for:
+        normalized = _normalize_forwarded_client_id(forwarded_for)
+        if normalized:
+            return normalized
+    return direct_client
+
+
+def _normalize_forwarded_client_id(value: str) -> str:
+    candidate = value.split(",", 1)[0].strip()
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return ""
+
+
+def _notify_rate_limited(client_id: str) -> bool:
+    if NOTIFY_RATE_LIMIT <= 0:
+        return False
+
+    now = time.time()
+    with _notify_rate_lock:
+        expired = [key for key, (_count, reset_time) in _notify_request_counts.items() if now > reset_time]
+        for key in expired:
+            _notify_request_counts.pop(key, None)
+        count, reset_time = _notify_request_counts.get(client_id, (0, 0.0))
+        if NOTIFY_RATE_CLIENT_LIMIT > 0 and client_id not in _notify_request_counts:
+            if len(_notify_request_counts) >= NOTIFY_RATE_CLIENT_LIMIT:
+                oldest = min(_notify_request_counts, key=lambda key: _notify_request_counts[key][1])
+                _notify_request_counts.pop(oldest, None)
+        if now > reset_time:
+            _notify_request_counts[client_id] = (1, now + NOTIFY_RATE_WINDOW_SECONDS)
+            return False
+        if count >= NOTIFY_RATE_LIMIT:
+            return True
+        _notify_request_counts[client_id] = (count + 1, reset_time)
+        return False
+
+
+def _notify_cors_headers(request: Request | None = None) -> dict[str, str]:
+    origin = request.headers.get("origin") if request else None
+    allowed_origin = NOTIFY_DEFAULT_CORS_ORIGIN
+    if origin and re.fullmatch(r"https?://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?", origin):
+        allowed_origin = origin
+    return {
+        "Access-Control-Allow-Origin": allowed_origin,
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Vary": "Origin",
+    }
+
+
+def _notify_json(payload: dict[str, Any], status_code: int = 200, request: Request | None = None) -> JSONResponse:
+    return JSONResponse(content=payload, status_code=status_code, headers=_notify_cors_headers(request))
+
+
+def _display_desktop_notification(title: str, message: str) -> bool:
+    if not _env_flag("AGENT_VOICE_NOTIFY_DESKTOP", True):
+        return False
+
+    osascript = shutil.which("osascript") or "/usr/bin/osascript"
+    script = (
+        f'display notification "{_escape_for_applescript(message)}" '
+        f'with title "{_escape_for_applescript(title)}" sound name ""'
+    )
+    try:
+        result = subprocess.run(
+            [osascript, "-e", script],
+            capture_output=True,
+            timeout=NOTIFY_OSASCRIPT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"Notification display error: {exc}", file=sys.stderr)
+        return False
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        print(f"Notification display error: {stderr}", file=sys.stderr)
+        return False
+    return True
+
+
+def _run_notify_voice_queued(work: Any) -> None:
+    global _notify_queue_depth
+
+    with _notify_queue_lock:
+        if _notify_queue_depth >= NOTIFY_QUEUE_MAX_DEPTH:
+            raise VoiceQueueFullError("voice queue full; dropping stale voice notification")
+        _notify_queue_depth += 1
+
+    try:
+        with _notify_playback_lock:
+            work()
+    finally:
+        with _notify_queue_lock:
+            _notify_queue_depth = max(0, _notify_queue_depth - 1)
+
+
+def _wav_duration_seconds(wav_bytes: bytes) -> float | None:
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wav:
+            frame_rate = wav.getframerate()
+            if frame_rate <= 0:
+                return None
+            return wav.getnframes() / frame_rate
+    except (EOFError, wave.Error):
+        return None
+
+
+def _notify_playback_timeout_seconds(wav_bytes: bytes) -> float | None:
+    if NOTIFY_PLAYBACK_TIMEOUT_SECONDS > 0:
+        return NOTIFY_PLAYBACK_TIMEOUT_SECONDS
+    duration = _wav_duration_seconds(wav_bytes)
+    if duration is None:
+        return 60.0
+    return max(1.0, duration + NOTIFY_PLAYBACK_GRACE_SECONDS)
+
+
+def _play_audio_bytes(wav_bytes: bytes) -> None:
+    afplay = shutil.which("afplay") or "/usr/bin/afplay"
+    fd, path = tempfile.mkstemp(prefix="agent-voice-notify-", suffix=".wav")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(wav_bytes)
+        result = subprocess.run(
+            [afplay, path],
+            capture_output=True,
+            timeout=_notify_playback_timeout_seconds(wav_bytes),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"afplay exited with code {result.returncode}")
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"afplay timed out after {exc.timeout:g}s") from exc
+    finally:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
+def _resolve_notify_voice(payload: NotifyPayload) -> tuple[str, bool]:
+    requested = payload.voice_id or payload.voice_name
+    custom_instruct = payload.instruct.strip() if payload.instruct else ""
+    if requested and (requested in VOICE_DESIGNS or custom_instruct):
+        return requested, False
+    if requested:
+        print(f"Unknown notify voice '{requested}'; falling back to {_notify_default_voice()}", file=sys.stderr)
+        return _notify_default_voice(), True
+    return _notify_default_voice(), False
+
+
+def _generate_and_play_notification_audio(
+    *,
+    text: str,
+    voice: str,
+    instruct: str | None,
+    language: str,
+) -> None:
+    speech_text = _apply_pronunciations(text)
+    custom_instruct = instruct.strip() if instruct else ""
+    voice_design = custom_instruct or VOICE_DESIGNS.get(voice)
+    if not voice_design:
+        raise RuntimeError(f"Unknown voice '{voice}'")
+
+    audio = generate_audio(
+        text=speech_text,
+        instruct=voice_design,
+        language=language,
+        response_format="wav",
+        max_tokens=TTS_MAX_TOKENS,
+    )
+    if not audio:
+        raise RuntimeError("No audio generated")
+    _play_audio_bytes(audio)
+
+
+def _send_notification(payload: NotifyPayload) -> dict[str, Any]:
+    title = _sanitize_notify_text(payload.title or NOTIFY_DEFAULT_TITLE, "title")
+    desktop_message = _sanitize_notify_text(payload.message or NOTIFY_DEFAULT_MESSAGE, "message")
+    speech_message = _sanitize_notify_text(
+        payload.message or NOTIFY_DEFAULT_MESSAGE,
+        "message",
+        preserve_pauses=True,
+    )
+    voice, voice_fallback = _resolve_notify_voice(payload)
+
+    desktop_displayed = _display_desktop_notification(title, desktop_message)
+    muted = mute_state.is_muted()
+    voice_played = False
+    voice_error: str | None = None
+
+    if payload.voice_enabled and not muted:
+        try:
+            _run_notify_voice_queued(
+                lambda: _generate_and_play_notification_audio(
+                    text=speech_message,
+                    voice=voice,
+                    instruct=payload.instruct,
+                    language=payload.language,
+                )
+            )
+            voice_played = True
+        except Exception as exc:
+            print(f"Failed to generate/play speech: {exc}", file=sys.stderr)
+            voice_error = str(exc) or "TTS generation failed"
+
+    if payload.voice_enabled and voice_error:
+        return {
+            "status": "partial",
+            "message": "Notification displayed, voice skipped",
+            "voice_error": voice_error,
+            "voice_played": False,
+            "voice": voice,
+            "voice_fallback": voice_fallback,
+            "muted": muted,
+            "desktop_displayed": desktop_displayed,
+        }
+
+    return {
+        "status": "success",
+        "message": "Notification sent",
+        "voice_played": voice_played,
+        "voice": voice,
+        "voice_fallback": voice_fallback,
+        "muted": muted,
+        "desktop_displayed": desktop_displayed,
+    }
+
+
+def _notify_health() -> dict[str, Any]:
+    host = os.getenv("AGENT_VOICE_HOST") or "127.0.0.1"
+    port = int(os.getenv("AGENT_VOICE_PORT") or "8880")
+    local_base_url = f"http://{host}:{port}"
+    with _notify_queue_lock:
+        queue_depth = _notify_queue_depth
+    return {
+        "status": "healthy",
+        "port": port,
+        "voice_system": "agent-voice",
+        "default_voice": _notify_default_voice(),
+        "upstream_url": f"{local_base_url}/v1/audio/speech",
+        "upstream_health_url": f"{local_base_url}/v1/health",
+        "pronunciation_rules": len(_load_pronunciation_rules()),
+        "pronunciations_path": str(_notify_pronunciations_path()),
+        "known_voices": list(VOICE_DESIGNS.keys()),
+        "known_voices_source": "local",
+        "voice_queue_depth": queue_depth,
+        "voice_queue_max_depth": NOTIFY_QUEUE_MAX_DEPTH,
+        "rate_limit": NOTIFY_RATE_LIMIT,
+        "rate_window_seconds": NOTIFY_RATE_WINDOW_SECONDS,
+        "rate_client_limit": NOTIFY_RATE_CLIENT_LIMIT,
+        "desktop_notifications": _env_flag("AGENT_VOICE_NOTIFY_DESKTOP", True),
+    }
+
+
+@app.options("/notify")
+@app.options("/notify/personality")
+@app.options("/pai")
+def notify_options(request: Request) -> Response:
+    return Response(status_code=204, headers=_notify_cors_headers(request))
+
+
+@app.get("/")
+def root() -> Response:
+    return Response(
+        content="agent-voice - POST to /notify, /notify/personality, /pai, or /v1/audio/speech",
+        media_type="text/plain",
+    )
+
+
+@app.get("/health")
+def notify_health(request: Request) -> JSONResponse:
+    return _notify_json(_notify_health(), request=request)
+
+
+@app.post("/notify")
+@app.post("/notify/personality")
+@app.post("/pai")
+def notify(payload: NotifyPayload, request: Request) -> JSONResponse:
+    client_id = _notify_client_id(request)
+    if _notify_rate_limited(client_id):
+        return _notify_json({"status": "error", "message": "Rate limit exceeded"}, status_code=429, request=request)
+    return _notify_json(_send_notification(payload), request=request)
 
 
 @app.get("/v1/health")

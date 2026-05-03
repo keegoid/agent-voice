@@ -21,6 +21,42 @@ default.
     the configured STT processor id, current `muted` state, and available
     public voice names.
   - must not load either model just to report health.
+- `GET /health`
+  - returns the compatibility health shape for legacy PAI notification callers.
+  - reports the local notify default voice, pronunciation rule count, known
+    voice names, queue depth, queue max depth, rate limit, and desktop
+    notification setting.
+  - must not load either model just to report health.
+- `POST /notify`, `POST /notify/personality`, and `POST /pai`
+  - accept legacy notification JSON fields:
+    - `title`, default `PAI Notification`
+    - `message`, default `Task completed`
+    - `voice_id` or `voice_name`, optional voice preset name
+    - `voice_enabled`, default `true`
+    - `instruct`, optional custom voice-design prompt
+    - `language`, default `English`
+  - sanitize `title` and `message`, reject empty or overlong values with HTTP
+    400, and preserve old PAI markdown-stripping behavior.
+  - display a macOS desktop notification when
+    `AGENT_VOICE_NOTIFY_DESKTOP` is enabled.
+  - when voice is enabled and master mute is off, generate WAV speech with the
+    same local Qwen3 runtime and play it with `afplay`.
+  - when master mute is on, display only the desktop notification and do not
+    call the TTS model.
+  - serialize playback and reject stale voice notifications when
+    `AGENT_VOICE_NOTIFY_QUEUE_MAX_DEPTH` would be exceeded.
+  - return HTTP 200 with `status: "partial"` when desktop notification succeeds
+    but speech generation or playback fails.
+  - return HTTP 429 when `AGENT_VOICE_NOTIFY_RATE_LIMIT` is exceeded within
+    `AGENT_VOICE_NOTIFY_RATE_WINDOW_SECONDS`.
+  - rate-limit by the direct client address by default. Trust
+    `X-Forwarded-For` only when `AGENT_VOICE_NOTIFY_TRUST_XFF=1` is set for a
+    local proxy deployment. `AGENT_VOICE_NOTIFY_RATE_CLIENT_LIMIT` bounds the
+    remembered client map inside each rate-limit window. Malformed forwarded
+    values fall back to the direct client address.
+  - load pronunciation replacements from
+    `AGENT_VOICE_PRONUNCIATIONS_PATH` or `~/.agent-voice/pronunciations.json`
+    with shape `{ "replacements": [{ "term": "...", "phonetic": "..." }] }`.
 - `GET /v1/mute`
   - returns the persistent master mute state.
 - `POST /v1/mute`

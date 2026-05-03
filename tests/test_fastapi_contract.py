@@ -86,6 +86,294 @@ def test_mute_endpoints_reject_writes_when_env_override_is_set(
     assert not state.exists()
 
 
+def test_notify_endpoint_accepts_legacy_payload_and_plays_voice(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.delenv("AGENT_VOICE_MUTED", raising=False)
+    server._notify_request_counts.clear()
+    monkeypatch.setattr(server, "_display_desktop_notification", lambda title, message: seen.setdefault("desktop", (title, message)) or True)
+    monkeypatch.setattr(server, "_play_audio_bytes", lambda audio: seen.setdefault("played", audio))
+
+    def fake_generation(*_args: Any, **kwargs: Any) -> bytes:
+        seen["generation"] = kwargs
+        return b"RIFFfakeWAVEfmt "
+
+    monkeypatch.setattr(server, "generate_audio", fake_generation)
+    client = TestClient(locate_fastapi_app())
+
+    response = client.post(
+        "/notify",
+        json={
+            "title": "PAI **Done**",
+            "message": "PAI finished `task`;\n\ncost is $5 | grep; see foo/../bar.",
+            "voice_id": "cyberpunk_cool",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["voice_played"] is True
+    assert data["voice"] == "cyberpunk_cool"
+    assert seen["desktop"] == ("PAI Done", "PAI finished task; cost is $5 | grep; see foo/../bar.")
+    assert seen["generation"]["text"] == "PAI finished task;\n\ncost is $5 | grep; see foo/../bar."
+    assert seen["generation"]["instruct"] == server.VOICE_DESIGNS["cyberpunk_cool"]
+    assert seen["played"] == b"RIFFfakeWAVEfmt "
+
+
+def test_notify_endpoint_falls_back_from_old_voice_ids(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.delenv("AGENT_VOICE_MUTED", raising=False)
+    server._notify_request_counts.clear()
+    monkeypatch.setattr(server, "_display_desktop_notification", lambda *_args: True)
+    monkeypatch.setattr(server, "_play_audio_bytes", lambda _audio: None)
+
+    def fake_generation(*_args: Any, **kwargs: Any) -> bytes:
+        seen.update(kwargs)
+        return b"RIFFfakeWAVEfmt "
+
+    monkeypatch.setattr(server, "generate_audio", fake_generation)
+    client = TestClient(locate_fastapi_app())
+
+    response = client.post(
+        "/notify",
+        json={"message": "fallback test", "voice_id": "fTtv3eikoepIosk8dTZ5"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["voice"] == "cyberpunk_cool"
+    assert data["voice_fallback"] is True
+    assert seen["instruct"] == server.VOICE_DESIGNS["cyberpunk_cool"]
+
+
+def test_notify_endpoint_respects_master_mute(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.delenv("AGENT_VOICE_MUTED", raising=False)
+    server._notify_request_counts.clear()
+    server.mute_state.set_muted(True, source="test")
+    monkeypatch.setattr(server, "_display_desktop_notification", lambda *_args: True)
+    monkeypatch.setattr(server, "generate_audio", lambda *_args, **_kwargs: pytest.fail("muted notify must not generate"))
+    monkeypatch.setattr(server, "_play_audio_bytes", lambda _audio: pytest.fail("muted notify must not play"))
+    client = TestClient(locate_fastapi_app())
+
+    response = client.post("/notify", json={"message": "desktop only while muted"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["muted"] is True
+    assert data["voice_played"] is False
+
+
+def test_notify_endpoint_applies_agent_voice_pronunciations(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    seen: dict[str, Any] = {}
+    state_dir = tmp_path / ".agent-voice"
+    state_dir.mkdir()
+    (state_dir / "pronunciations.json").write_text(
+        json.dumps(
+            {
+                "replacements": [
+                    {"term": "PAI", "phonetic": "pie"},
+                    {"term": "ISC", "phonetic": "I S C"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENT_VOICE_HOME", str(state_dir))
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.delenv("AGENT_VOICE_MUTED", raising=False)
+    server._notify_request_counts.clear()
+    monkeypatch.setattr(server, "_display_desktop_notification", lambda *_args: True)
+    monkeypatch.setattr(server, "_play_audio_bytes", lambda _audio: None)
+
+    def fake_generation(*_args: Any, **kwargs: Any) -> bytes:
+        seen.update(kwargs)
+        return b"RIFFfakeWAVEfmt "
+
+    monkeypatch.setattr(server, "generate_audio", fake_generation)
+    client = TestClient(locate_fastapi_app())
+
+    response = client.post("/pai", json={"message": "PAI joined ISC"})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+    assert seen["text"] == "pie joined I S C"
+
+
+def test_notify_pronunciations_default_to_agent_voice_home(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    state_dir = tmp_path / ".agent-voice"
+    monkeypatch.setenv("AGENT_VOICE_HOME", str(state_dir))
+    monkeypatch.delenv("AGENT_VOICE_PRONUNCIATIONS_PATH", raising=False)
+
+    assert server._notify_pronunciations_path() == state_dir / "pronunciations.json"
+
+
+def test_notify_cors_allows_loopback_origins_with_ports(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.delenv("AGENT_VOICE_MUTED", raising=False)
+    server._notify_request_counts.clear()
+    monkeypatch.setattr(server, "_display_desktop_notification", lambda *_args: True)
+    client = TestClient(locate_fastapi_app())
+
+    response = client.options(
+        "/notify",
+        headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "POST"},
+    )
+
+    assert response.status_code == 204
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert response.headers["vary"] == "Origin"
+
+
+def test_notify_rate_limit_prunes_expired_clients() -> None:
+    import agent_voice.server as server
+
+    server._notify_request_counts.clear()
+    server._notify_request_counts["expired"] = (1, 0.0)
+
+    assert server._notify_rate_limited("active") is False
+    assert "expired" not in server._notify_request_counts
+    assert "active" in server._notify_request_counts
+
+
+def test_notify_rate_limit_ignores_xff_without_trust_opt_in(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.delenv("AGENT_VOICE_NOTIFY_TRUST_XFF", raising=False)
+    monkeypatch.setattr(server, "NOTIFY_RATE_LIMIT", 1)
+    server._notify_request_counts.clear()
+    monkeypatch.setattr(server, "_display_desktop_notification", lambda *_args: True)
+    client = TestClient(locate_fastapi_app())
+
+    first = client.post(
+        "/notify",
+        json={"message": "first", "voice_enabled": False},
+        headers={"X-Forwarded-For": "198.51.100.1"},
+    )
+    second = client.post(
+        "/notify",
+        json={"message": "second", "voice_enabled": False},
+        headers={"X-Forwarded-For": "198.51.100.2"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+
+
+def test_notify_rate_limit_bounds_trusted_xff_clients(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.setenv("AGENT_VOICE_NOTIFY_TRUST_XFF", "1")
+    monkeypatch.setattr(server, "NOTIFY_RATE_CLIENT_LIMIT", 1)
+    server._notify_request_counts.clear()
+    monkeypatch.setattr(server, "_display_desktop_notification", lambda *_args: True)
+    client = TestClient(locate_fastapi_app())
+
+    first = client.post(
+        "/notify",
+        json={"message": "first", "voice_enabled": False},
+        headers={"X-Forwarded-For": "198.51.100.1"},
+    )
+    second = client.post(
+        "/notify",
+        json={"message": "second", "voice_enabled": False},
+        headers={"X-Forwarded-For": "198.51.100.2"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert set(server._notify_request_counts) == {"198.51.100.2"}
+
+
+def test_notify_rate_limit_falls_back_for_malformed_trusted_xff(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.setenv("AGENT_VOICE_NOTIFY_TRUST_XFF", "1")
+    monkeypatch.setattr(server, "NOTIFY_RATE_LIMIT", 1)
+    server._notify_request_counts.clear()
+    monkeypatch.setattr(server, "_display_desktop_notification", lambda *_args: True)
+    client = TestClient(locate_fastapi_app())
+
+    first = client.post(
+        "/notify",
+        json={"message": "first", "voice_enabled": False},
+        headers={"X-Forwarded-For": "not-an-ip"},
+    )
+    second = client.post(
+        "/notify",
+        json={"message": "second", "voice_enabled": False},
+        headers={"X-Forwarded-For": "also-not-an-ip"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+
+
+def test_notify_health_reports_compatibility_state_without_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    server._notify_request_counts.clear()
+    monkeypatch.setattr(server, "generate_audio", lambda *_args, **_kwargs: pytest.fail("health must not generate"))
+    client = TestClient(locate_fastapi_app())
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "healthy"
+    assert data["voice_system"] == "agent-voice"
+    assert data["default_voice"] == "cyberpunk_cool"
+    assert set(data["known_voices"]) >= PUBLIC_VOICES
+
+
 def test_speech_returns_silence_without_generation_when_muted(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
