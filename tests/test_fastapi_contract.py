@@ -270,6 +270,34 @@ def test_notify_rate_limit_prunes_expired_clients() -> None:
     assert "active" in server._notify_request_counts
 
 
+def test_notify_rate_limit_ignores_xff_without_trust_opt_in(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.delenv("AGENT_VOICE_NOTIFY_TRUST_XFF", raising=False)
+    monkeypatch.setattr(server, "NOTIFY_RATE_LIMIT", 1)
+    server._notify_request_counts.clear()
+    monkeypatch.setattr(server, "_display_desktop_notification", lambda *_args: True)
+    client = TestClient(locate_fastapi_app())
+
+    first = client.post(
+        "/notify",
+        json={"message": "first", "voice_enabled": False},
+        headers={"X-Forwarded-For": "198.51.100.1"},
+    )
+    second = client.post(
+        "/notify",
+        json={"message": "second", "voice_enabled": False},
+        headers={"X-Forwarded-For": "198.51.100.2"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+
+
 def test_notify_health_reports_compatibility_state_without_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

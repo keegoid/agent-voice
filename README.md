@@ -167,6 +167,8 @@ Notify playback is serialized and bounded by
 `AGENT_VOICE_NOTIFY_QUEUE_MAX_DEPTH=3` by default. Tune defaults with
 `AGENT_VOICE_NOTIFY_DEFAULT_VOICE`, `AGENT_VOICE_NOTIFY_DESKTOP`,
 `AGENT_VOICE_NOTIFY_RATE_LIMIT`, and `AGENT_VOICE_NOTIFY_PLAYBACK_TIMEOUT_SECONDS`.
+If a trusted local proxy fronts the loopback service, set
+`AGENT_VOICE_NOTIFY_TRUST_XFF=1` to rate-limit by `X-Forwarded-For`.
 
 Mute state:
 

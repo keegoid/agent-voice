@@ -766,12 +766,15 @@ def _notify_default_voice() -> str:
     return configured if configured in VOICE_DESIGNS else "cyberpunk_cool"
 
 
+def _notify_state_dir() -> Path:
+    return Path(os.environ.get("AGENT_VOICE_HOME") or Path.home() / ".agent-voice").expanduser()
+
+
 def _notify_pronunciations_path() -> Path:
     configured = os.getenv("AGENT_VOICE_PRONUNCIATIONS_PATH")
     if configured:
         return Path(configured).expanduser()
-    # Keep notify config under the same installed state root used by mute state.
-    return mute_state.state_dir() / "pronunciations.json"
+    return _notify_state_dir() / "pronunciations.json"
 
 
 def _load_pronunciation_rules() -> list[tuple[re.Pattern[str], str]]:
@@ -834,9 +837,11 @@ def _escape_for_applescript(value: str) -> str:
 
 
 def _notify_client_id(request: Request) -> str:
-    # The service binds to loopback by default. If a trusted local proxy is put
-    # in front of it, that proxy owns normalizing or stripping X-Forwarded-For.
-    forwarded_for = request.headers.get("x-forwarded-for")
+    # The service binds to loopback by default. Only trust proxy-supplied client
+    # identity when a local deployment explicitly opts into that proxy contract.
+    forwarded_for = (
+        request.headers.get("x-forwarded-for") if _env_flag("AGENT_VOICE_NOTIFY_TRUST_XFF", False) else None
+    )
     if forwarded_for:
         return forwarded_for.split(",", 1)[0].strip() or "localhost"
     return request.client.host if request.client else "localhost"
