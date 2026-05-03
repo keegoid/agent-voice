@@ -133,6 +133,11 @@ Public voice names are:
 - `cool_figment_rain_voice_locked`
 - `cool_street_deadpan_voice_locked`
 - `cyberpunk_cool`
+- `cyberpunk_cool_male`
+- `male_boardroom_baritone_locked`
+- `male_market_floor_tenor_locked`
+- `male_editorial_bass_locked`
+- `male_mission_control_commander_locked`
 - `peng_mythic`
 - `anime_sultry`
 - `anime_energetic`

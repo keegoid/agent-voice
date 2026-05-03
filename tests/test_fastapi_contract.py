@@ -94,6 +94,7 @@ def test_notify_endpoint_accepts_legacy_payload_and_plays_voice(
 
     seen: dict[str, Any] = {}
     monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.setenv("AGENT_VOICE_PRONUNCIATIONS_PATH", str(tmp_path / "missing-pronunciations.json"))
     monkeypatch.delenv("AGENT_VOICE_MUTED", raising=False)
     server._notify_request_counts.clear()
     monkeypatch.setattr(server, "_display_desktop_notification", lambda title, message: seen.setdefault("desktop", (title, message)) or True)
