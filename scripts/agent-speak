@@ -27,10 +27,176 @@ timestamp() {
   date '+%Y-%m-%dT%H:%M:%S%z'
 }
 
+normalize_speaker_label() {
+  local label="$*"
+  label="${label//$'\n'/ }"
+  label="${label//$'\r'/ }"
+  label="${label//$'\t'/ }"
+  label="${label#"${label%%[![:space:]]*}"}"
+  label="${label%"${label##*[![:space:]]}"}"
+  while [[ "$label" == *"  "* ]]; do
+    label="${label//  / }"
+  done
+  printf '%s' "$label"
+}
+
+paperclip_cache_key() {
+  local raw="$1"
+  printf '%s' "$raw" | tr -c 'A-Za-z0-9_.-' '_'
+}
+
+paperclip_speaker_cache_path() {
+  local company_key agent_key cache_dir
+  [[ -n "${PAPERCLIP_COMPANY_ID:-}" && -n "${PAPERCLIP_AGENT_ID:-}" ]] || return 1
+  company_key="$(paperclip_cache_key "$PAPERCLIP_COMPANY_ID")"
+  agent_key="$(paperclip_cache_key "$PAPERCLIP_AGENT_ID")"
+  cache_dir="$state_dir/cache/paperclip-speakers"
+  printf '%s/%s-%s.label' "$cache_dir" "$company_key" "$agent_key"
+}
+
+json_string_field() {
+  local filter="$1"
+  local payload="$2"
+  jq -r "$filter // empty" <<<"$payload" 2>/dev/null
+}
+
+speaker_descriptor_has_company_prefix() {
+  local descriptor="$1"
+  local prefix="$2"
+  local descriptor_upper prefix_upper
+  [[ -n "$descriptor" && -n "$prefix" ]] || return 1
+  descriptor_upper="$(printf '%s' "$descriptor" | tr '[:lower:]' '[:upper:]')"
+  prefix_upper="$(printf '%s' "$prefix" | tr '[:lower:]' '[:upper:]')"
+  case "$descriptor_upper" in
+    "$prefix_upper"|"$prefix_upper "[![:space:]]*|"$prefix_upper-"[![:space:]]*|"$prefix_upper:"[![:space:]]*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+format_paperclip_speaker_label() {
+  local agent_json="$1"
+  local company_json="$2"
+  local prefix name role role_lower title descriptor label
+
+  prefix="$(normalize_speaker_label "$(json_string_field '.issuePrefix' "$company_json")")"
+  name="$(normalize_speaker_label "$(json_string_field '.name' "$agent_json")")"
+  role="$(normalize_speaker_label "$(json_string_field '.role' "$agent_json")")"
+  title="$(normalize_speaker_label "$(json_string_field '.title' "$agent_json")")"
+
+  role_lower="$(printf '%s' "$role" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$role_lower" == "ceo" ]]; then
+    descriptor="CEO"
+  elif [[ -n "$name" ]]; then
+    descriptor="$name"
+    if [[ -n "$title" && "$descriptor" == *" ($title)" ]]; then
+      descriptor="${descriptor%" ($title)"}"
+    fi
+  elif [[ -n "$title" ]]; then
+    descriptor="$title"
+  elif [[ -n "$role" ]]; then
+    descriptor="$role"
+  else
+    descriptor="${PAPERCLIP_AGENT_ID:-}"
+  fi
+
+  descriptor="$(normalize_speaker_label "$descriptor")"
+  [[ -n "$descriptor" ]] || return 1
+
+  if [[ -n "$prefix" ]] && ! speaker_descriptor_has_company_prefix "$descriptor" "$prefix"; then
+    label="$prefix $descriptor"
+  else
+    label="$descriptor"
+  fi
+
+  normalize_speaker_label "$label"
+}
+
+fetch_paperclip_speaker_label() {
+  local api_url token timeout agent_json company_id company_json label
+  [[ -n "${PAPERCLIP_AGENT_ID:-}" && -n "${PAPERCLIP_COMPANY_ID:-}" ]] || return 1
+  [[ -n "${PAPERCLIP_API_URL:-}" && -n "${PAPERCLIP_API_KEY:-}" ]] || return 1
+  command -v curl >/dev/null 2>&1 || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+
+  api_url="${PAPERCLIP_API_URL%/}"
+  token="$PAPERCLIP_API_KEY"
+  timeout="${AGENT_VOICE_PAPERCLIP_LABEL_TIMEOUT_SECONDS:-2}"
+
+  agent_json="$(curl -fsS --max-time "$timeout" -H "Authorization: Bearer $token" "$api_url/api/agents/me" 2>/dev/null)" || return 1
+  company_id="$(json_string_field '.companyId' "$agent_json")"
+  [[ -n "$company_id" ]] || company_id="$PAPERCLIP_COMPANY_ID"
+  company_json="$(curl -fsS --max-time "$timeout" -H "Authorization: Bearer $token" "$api_url/api/companies/$company_id" 2>/dev/null || true)"
+
+  label="$(format_paperclip_speaker_label "$agent_json" "$company_json")"
+  [[ -n "$label" ]] || return 1
+  printf '%s' "$label"
+}
+
+resolve_speaker_label() {
+  local configured cache_path label
+  if [[ "${AGENT_VOICE_SPEAKER_LABEL_ENABLED:-1}" =~ ^(0|false|False|FALSE|no|No|NO)$ ]]; then
+    return 1
+  fi
+
+  configured="${AGENT_VOICE_SPEAKER_LABEL:-${PAPERCLIP_VOICE_LABEL:-}}"
+  if [[ -n "$configured" ]]; then
+    label="$(normalize_speaker_label "$configured")"
+    [[ -n "$label" ]] || return 1
+    printf '%s' "$label"
+    return 0
+  fi
+
+  cache_path="$(paperclip_speaker_cache_path 2>/dev/null || true)"
+  label="$(fetch_paperclip_speaker_label 2>/dev/null || true)"
+  if [[ -n "$label" ]]; then
+    if [[ -n "$cache_path" ]]; then
+      mkdir -p "$(dirname "$cache_path")" 2>/dev/null || true
+      printf '%s\n' "$label" >"$cache_path" 2>/dev/null || true
+    fi
+    printf '%s' "$label"
+    return 0
+  fi
+
+  if [[ -n "$cache_path" && -r "$cache_path" ]]; then
+    label="$(normalize_speaker_label "$(cat "$cache_path" 2>/dev/null || true)")"
+    if [[ -n "$label" ]]; then
+      printf '%s' "$label"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+text_already_has_speaker_label() {
+  local label="$1"
+  local text="$2"
+  local label_upper text_upper
+  label_upper="$(printf '%s' "$label" | tr '[:lower:]' '[:upper:]')"
+  text_upper="$(normalize_speaker_label "$text" | tr '[:lower:]' '[:upper:]')"
+  case "$text_upper" in
+    "$label_upper"|"$label_upper "*|"$label_upper."*|"$label_upper:"*|"$label_upper,"*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 run_worker() {
   lock="${AGENT_VOICE_SPEAK_LOCK:-${TMPDIR:-/tmp}/agent-speak.lock}"
   wait_seconds="${AGENT_VOICE_SPEAK_LOCK_WAIT_SECONDS:-120}"
   deadline=$((SECONDS + wait_seconds))
+  speech_args=("$@")
+  speaker_label=""
+
+  if [[ $# -gt 0 && "$1" != -* ]]; then
+    speaker_label="$(resolve_speaker_label 2>/dev/null || true)"
+    if [[ -n "$speaker_label" ]] && ! text_already_has_speaker_label "$speaker_label" "$*"; then
+      speech_args=("$speaker_label. $*")
+    fi
+  fi
 
   while ! mkdir "$lock" 2>/dev/null; do
     lock_pid="$(cat "$lock/pid" 2>/dev/null || true)"
@@ -53,8 +219,8 @@ run_worker() {
   }
   trap finish EXIT INT TERM HUP
 
-  printf "%s agent-speak start: %s\n" "$(timestamp)" "$*" >>"$log"
-  "$helper" "$@" </dev/null >>"$log" 2>&1
+  printf "%s agent-speak start: %s\n" "$(timestamp)" "${speech_args[*]}" >>"$log"
+  "$helper" "${speech_args[@]}" </dev/null >>"$log" 2>&1
   rc=$?
   printf "%s agent-speak finish rc=%s\n" "$(timestamp)" "$rc" >>"$log"
   return 0

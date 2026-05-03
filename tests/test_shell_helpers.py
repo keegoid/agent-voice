@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import subprocess
 import textwrap
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from tests.helpers.public_contract import MockSpeechServer, make_fake_bin, require_executable, run_with_home
@@ -14,6 +16,145 @@ def test_agent_speak_no_args_is_safe_success(tmp_path: Path) -> None:
     result = run_with_home([str(agent_speak)], tmp_path)
 
     assert result.returncode == 0, result.stderr
+
+
+def test_agent_speak_prepends_configured_speaker_label(tmp_path: Path) -> None:
+    agent_speak = require_executable("agent-speak")
+    capture = tmp_path / "spoken.txt"
+    helper = make_fake_bin(
+        tmp_path / "bin",
+        "fake-voice-helper",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s\\n' "$*" >> "{capture}"
+        """,
+    )
+
+    result = run_with_home(
+        [str(agent_speak), "hello from tests"],
+        tmp_path,
+        extra_env={
+            "AGENT_VOICE_HELPER": str(helper),
+            "AGENT_VOICE_SPEAK_SYNC": "1",
+            "AGENT_VOICE_SPEAK_LOCK": str(tmp_path / "speak.lock"),
+            "AGENT_VOICE_SPEAKER_LABEL": " DEV CEO ",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert capture.read_text(encoding="utf-8").strip() == "DEV CEO. hello from tests"
+
+
+def test_agent_speak_does_not_duplicate_existing_label(tmp_path: Path) -> None:
+    agent_speak = require_executable("agent-speak")
+    capture = tmp_path / "spoken.txt"
+    helper = make_fake_bin(
+        tmp_path / "bin",
+        "fake-voice-helper",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s\\n' "$*" >> "{capture}"
+        """,
+    )
+
+    result = run_with_home(
+        [str(agent_speak), "DEV CEO. already labeled"],
+        tmp_path,
+        extra_env={
+            "AGENT_VOICE_HELPER": str(helper),
+            "AGENT_VOICE_SPEAK_SYNC": "1",
+            "AGENT_VOICE_SPEAK_LOCK": str(tmp_path / "speak.lock"),
+            "AGENT_VOICE_SPEAKER_LABEL": "DEV CEO",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert capture.read_text(encoding="utf-8").strip() == "DEV CEO. already labeled"
+
+
+class MockPaperclipServer:
+    def __init__(self) -> None:
+        self.requests: list[str] = []
+        self._server: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
+
+    @property
+    def url(self) -> str:
+        assert self._server is not None
+        host, port = self._server.server_address
+        return f"http://{host}:{port}"
+
+    def __enter__(self) -> "MockPaperclipServer":
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                outer.requests.append(self.path)
+                if self.path == "/api/agents/me":
+                    payload = {
+                        "id": "agent-1",
+                        "companyId": "company-1",
+                        "name": "keegoid-codex",
+                        "role": "reviewer",
+                        "title": "Codex PR Owner",
+                    }
+                elif self.path == "/api/companies/company-1":
+                    payload = {"id": "company-1", "name": "DEVELOPMENT", "issuePrefix": "DEV"}
+                else:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(payload).encode())
+
+            def log_message(self, *_args: object) -> None:
+                return
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        if self._server:
+            self._server.shutdown()
+            self._server.server_close()
+        if self._thread:
+            self._thread.join(timeout=2)
+
+
+def test_agent_speak_resolves_paperclip_speaker_label_from_api(tmp_path: Path) -> None:
+    agent_speak = require_executable("agent-speak")
+    capture = tmp_path / "spoken.txt"
+    helper = make_fake_bin(
+        tmp_path / "bin",
+        "fake-voice-helper",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s\\n' "$*" >> "{capture}"
+        """,
+    )
+
+    with MockPaperclipServer() as server:
+        result = run_with_home(
+            [str(agent_speak), "opening the PR"],
+            tmp_path,
+            extra_env={
+                "AGENT_VOICE_HELPER": str(helper),
+                "AGENT_VOICE_SPEAK_SYNC": "1",
+                "AGENT_VOICE_SPEAK_LOCK": str(tmp_path / "speak.lock"),
+                "PAPERCLIP_AGENT_ID": "agent-1",
+                "PAPERCLIP_COMPANY_ID": "company-1",
+                "PAPERCLIP_API_URL": server.url,
+                "PAPERCLIP_API_KEY": "test-token",
+            },
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert capture.read_text(encoding="utf-8").strip() == "DEV keegoid-codex. opening the PR"
+    assert "/api/agents/me" in server.requests
+    assert "/api/companies/company-1" in server.requests
 
 
 def test_agent_voice_summary_rejects_empty_input(tmp_path: Path) -> None:
