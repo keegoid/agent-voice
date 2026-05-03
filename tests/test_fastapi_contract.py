@@ -110,7 +110,7 @@ def test_notify_endpoint_accepts_legacy_payload_and_plays_voice(
         "/notify",
         json={
             "title": "PAI **Done**",
-            "message": "PAI finished `task`; cost is $5 | grep.",
+            "message": "PAI finished `task`;\n\ncost is $5 | grep.",
             "voice_id": "cyberpunk_cool",
         },
     )
@@ -121,7 +121,7 @@ def test_notify_endpoint_accepts_legacy_payload_and_plays_voice(
     assert data["voice_played"] is True
     assert data["voice"] == "cyberpunk_cool"
     assert seen["desktop"] == ("PAI Done", "PAI finished task; cost is $5 | grep.")
-    assert seen["generation"]["text"] == "PAI finished task; cost is $5 | grep."
+    assert seen["generation"]["text"] == "PAI finished task;\n\ncost is $5 | grep."
     assert seen["generation"]["instruct"] == server.VOICE_DESIGNS["cyberpunk_cool"]
     assert seen["played"] == b"RIFFfakeWAVEfmt "
 
@@ -279,6 +279,34 @@ def test_notify_rate_limit_ignores_xff_without_trust_opt_in(
     monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
     monkeypatch.delenv("AGENT_VOICE_NOTIFY_TRUST_XFF", raising=False)
     monkeypatch.setattr(server, "NOTIFY_RATE_LIMIT", 1)
+    server._notify_request_counts.clear()
+    monkeypatch.setattr(server, "_display_desktop_notification", lambda *_args: True)
+    client = TestClient(locate_fastapi_app())
+
+    first = client.post(
+        "/notify",
+        json={"message": "first", "voice_enabled": False},
+        headers={"X-Forwarded-For": "198.51.100.1"},
+    )
+    second = client.post(
+        "/notify",
+        json={"message": "second", "voice_enabled": False},
+        headers={"X-Forwarded-For": "198.51.100.2"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+
+
+def test_notify_rate_limit_bounds_trusted_xff_clients(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.setenv("AGENT_VOICE_NOTIFY_TRUST_XFF", "1")
+    monkeypatch.setattr(server, "NOTIFY_RATE_CLIENT_LIMIT", 1)
     server._notify_request_counts.clear()
     monkeypatch.setattr(server, "_display_desktop_notification", lambda *_args: True)
     client = TestClient(locate_fastapi_app())

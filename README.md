@@ -169,6 +169,8 @@ Notify playback is serialized and bounded by
 `AGENT_VOICE_NOTIFY_RATE_LIMIT`, and `AGENT_VOICE_NOTIFY_PLAYBACK_TIMEOUT_SECONDS`.
 If a trusted local proxy fronts the loopback service, set
 `AGENT_VOICE_NOTIFY_TRUST_XFF=1` to rate-limit by `X-Forwarded-For`.
+`AGENT_VOICE_NOTIFY_RATE_CLIENT_LIMIT=256` bounds the number of remembered
+clients inside each rate-limit window.
 
 Mute state:
 

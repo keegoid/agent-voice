@@ -51,7 +51,8 @@ default.
     `AGENT_VOICE_NOTIFY_RATE_WINDOW_SECONDS`.
   - rate-limit by the direct client address by default. Trust
     `X-Forwarded-For` only when `AGENT_VOICE_NOTIFY_TRUST_XFF=1` is set for a
-    local proxy deployment.
+    local proxy deployment. `AGENT_VOICE_NOTIFY_RATE_CLIENT_LIMIT` bounds the
+    remembered client map inside each rate-limit window.
   - load pronunciation replacements from
     `AGENT_VOICE_PRONUNCIATIONS_PATH` or `~/.agent-voice/pronunciations.json`
     with shape `{ "replacements": [{ "term": "...", "phonetic": "..." }] }`.

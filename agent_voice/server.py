@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import inspect
+import ipaddress
 import json
 import logging
 import os
@@ -72,6 +73,7 @@ NOTIFY_DEFAULT_MESSAGE = os.getenv("AGENT_VOICE_NOTIFY_DEFAULT_MESSAGE") or "Tas
 NOTIFY_MAX_CHARS = int(os.getenv("AGENT_VOICE_NOTIFY_MAX_CHARS") or "1000")
 NOTIFY_RATE_LIMIT = int(os.getenv("AGENT_VOICE_NOTIFY_RATE_LIMIT") or "10")
 NOTIFY_RATE_WINDOW_SECONDS = float(os.getenv("AGENT_VOICE_NOTIFY_RATE_WINDOW_SECONDS") or "60")
+NOTIFY_RATE_CLIENT_LIMIT = int(os.getenv("AGENT_VOICE_NOTIFY_RATE_CLIENT_LIMIT") or "256")
 NOTIFY_QUEUE_MAX_DEPTH = int(os.getenv("AGENT_VOICE_NOTIFY_QUEUE_MAX_DEPTH") or "3")
 NOTIFY_PLAYBACK_TIMEOUT_SECONDS = float(os.getenv("AGENT_VOICE_NOTIFY_PLAYBACK_TIMEOUT_SECONDS") or "0")
 NOTIFY_PLAYBACK_GRACE_SECONDS = float(os.getenv("AGENT_VOICE_NOTIFY_PLAYBACK_GRACE_SECONDS") or "2")
@@ -810,22 +812,27 @@ def _apply_pronunciations(text: str) -> str:
     return result
 
 
-def _sanitize_notify_text(value: str, field: str) -> str:
+def _sanitize_notify_text(value: str, field: str, *, preserve_pauses: bool = False) -> str:
     if len(value) > NOTIFY_MAX_CHARS:
         raise HTTPException(status_code=400, detail=f"{field} too long (max {NOTIFY_MAX_CHARS} characters)")
     # Keep markdown/control cleanup shared by the desktop banner and speech.
     # AppleScript-specific safety is handled later by _escape_for_applescript.
-    sanitized = (
-        value.replace("\r", " ")
-        .replace("\n", " ")
-    )
+    sanitized = value.replace("\r\n", "\n").replace("\r", "\n")
+    if not preserve_pauses:
+        sanitized = sanitized.replace("\n", " ")
     sanitized = re.sub(r"<script", "", sanitized, flags=re.IGNORECASE)
     sanitized = sanitized.replace("../", "")
     sanitized = re.sub(r"\*\*([^*]+)\*\*", r"\1", sanitized)
     sanitized = re.sub(r"\*([^*]+)\*", r"\1", sanitized)
     sanitized = re.sub(r"`([^`]+)`", r"\1", sanitized)
     sanitized = re.sub(r"#{1,6}\s+", "", sanitized)
-    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    if preserve_pauses:
+        sanitized = re.sub(r"[ \t\f\v]+", " ", sanitized)
+        sanitized = re.sub(r" *\n *", "\n", sanitized)
+        sanitized = re.sub(r"\n{3,}", "\n\n", sanitized)
+    else:
+        sanitized = re.sub(r"\s+", " ", sanitized)
+    sanitized = sanitized.strip()
     if not sanitized:
         raise HTTPException(status_code=400, detail=f"{field} contains no valid content after sanitization")
     return sanitized[:NOTIFY_MAX_CHARS]
@@ -842,8 +849,18 @@ def _notify_client_id(request: Request) -> str:
         request.headers.get("x-forwarded-for") if _env_flag("AGENT_VOICE_NOTIFY_TRUST_XFF", False) else None
     )
     if forwarded_for:
-        return forwarded_for.split(",", 1)[0].strip() or "localhost"
+        normalized = _normalize_forwarded_client_id(forwarded_for)
+        if normalized:
+            return normalized
     return request.client.host if request.client else "localhost"
+
+
+def _normalize_forwarded_client_id(value: str) -> str:
+    candidate = value.split(",", 1)[0].strip()
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return ""
 
 
 def _notify_rate_limited(client_id: str) -> bool:
@@ -856,6 +873,9 @@ def _notify_rate_limited(client_id: str) -> bool:
         for key in expired:
             _notify_request_counts.pop(key, None)
         count, reset_time = _notify_request_counts.get(client_id, (0, 0.0))
+        if NOTIFY_RATE_CLIENT_LIMIT > 0 and client_id not in _notify_request_counts:
+            if len(_notify_request_counts) >= NOTIFY_RATE_CLIENT_LIMIT:
+                return True
         if now > reset_time:
             _notify_request_counts[client_id] = (1, now + NOTIFY_RATE_WINDOW_SECONDS)
             return False
@@ -1003,10 +1023,15 @@ def _generate_and_play_notification_audio(
 
 def _send_notification(payload: NotifyPayload) -> dict[str, Any]:
     title = _sanitize_notify_text(payload.title or NOTIFY_DEFAULT_TITLE, "title")
-    message = _sanitize_notify_text(payload.message or NOTIFY_DEFAULT_MESSAGE, "message")
+    desktop_message = _sanitize_notify_text(payload.message or NOTIFY_DEFAULT_MESSAGE, "message")
+    speech_message = _sanitize_notify_text(
+        payload.message or NOTIFY_DEFAULT_MESSAGE,
+        "message",
+        preserve_pauses=True,
+    )
     voice, voice_fallback = _resolve_notify_voice(payload)
 
-    desktop_displayed = _display_desktop_notification(title, message)
+    desktop_displayed = _display_desktop_notification(title, desktop_message)
     muted = mute_state.is_muted()
     voice_played = False
     voice_error: str | None = None
@@ -1015,7 +1040,7 @@ def _send_notification(payload: NotifyPayload) -> dict[str, Any]:
         try:
             _run_notify_voice_queued(
                 lambda: _generate_and_play_notification_audio(
-                    text=message,
+                    text=speech_message,
                     voice=voice,
                     instruct=payload.instruct,
                     language=payload.language,
@@ -1070,6 +1095,7 @@ def _notify_health() -> dict[str, Any]:
         "voice_queue_max_depth": NOTIFY_QUEUE_MAX_DEPTH,
         "rate_limit": NOTIFY_RATE_LIMIT,
         "rate_window_seconds": NOTIFY_RATE_WINDOW_SECONDS,
+        "rate_client_limit": NOTIFY_RATE_CLIENT_LIMIT,
         "desktop_notifications": _env_flag("AGENT_VOICE_NOTIFY_DESKTOP", True),
     }
 
