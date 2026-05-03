@@ -76,11 +76,7 @@ NOTIFY_QUEUE_MAX_DEPTH = int(os.getenv("AGENT_VOICE_NOTIFY_QUEUE_MAX_DEPTH") or 
 NOTIFY_PLAYBACK_TIMEOUT_SECONDS = float(os.getenv("AGENT_VOICE_NOTIFY_PLAYBACK_TIMEOUT_SECONDS") or "0")
 NOTIFY_PLAYBACK_GRACE_SECONDS = float(os.getenv("AGENT_VOICE_NOTIFY_PLAYBACK_GRACE_SECONDS") or "2")
 NOTIFY_OSASCRIPT_TIMEOUT_SECONDS = float(os.getenv("AGENT_VOICE_NOTIFY_OSASCRIPT_TIMEOUT_SECONDS") or "5")
-NOTIFY_CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "http://localhost",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-}
+NOTIFY_DEFAULT_CORS_ORIGIN = "http://localhost"
 
 app = FastAPI(title="agent-voice", version="0.2.1")
 _tts_model = None
@@ -774,6 +770,7 @@ def _notify_pronunciations_path() -> Path:
     configured = os.getenv("AGENT_VOICE_PRONUNCIATIONS_PATH")
     if configured:
         return Path(configured).expanduser()
+    # Keep notify config under the same installed state root used by mute state.
     return mute_state.state_dir() / "pronunciations.json"
 
 
@@ -813,6 +810,8 @@ def _apply_pronunciations(text: str) -> str:
 def _sanitize_notify_text(value: str, field: str) -> str:
     if len(value) > NOTIFY_MAX_CHARS:
         raise HTTPException(status_code=400, detail=f"{field} too long (max {NOTIFY_MAX_CHARS} characters)")
+    # Preserve the legacy PAI sanitizer contract for both the desktop banner and
+    # spoken text so old callers keep identical markdown/shell-token cleanup.
     sanitized = (
         value.replace("\r", " ")
         .replace("\n", " ")
@@ -835,6 +834,8 @@ def _escape_for_applescript(value: str) -> str:
 
 
 def _notify_client_id(request: Request) -> str:
+    # The service binds to loopback by default. If a trusted local proxy is put
+    # in front of it, that proxy owns normalizing or stripping X-Forwarded-For.
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for:
         return forwarded_for.split(",", 1)[0].strip() or "localhost"
@@ -847,6 +848,9 @@ def _notify_rate_limited(client_id: str) -> bool:
 
     now = time.time()
     with _notify_rate_lock:
+        expired = [key for key, (_count, reset_time) in _notify_request_counts.items() if now > reset_time]
+        for key in expired:
+            _notify_request_counts.pop(key, None)
         count, reset_time = _notify_request_counts.get(client_id, (0, 0.0))
         if now > reset_time:
             _notify_request_counts[client_id] = (1, now + NOTIFY_RATE_WINDOW_SECONDS)
@@ -857,8 +861,21 @@ def _notify_rate_limited(client_id: str) -> bool:
         return False
 
 
-def _notify_json(payload: dict[str, Any], status_code: int = 200) -> JSONResponse:
-    return JSONResponse(content=payload, status_code=status_code, headers=NOTIFY_CORS_HEADERS)
+def _notify_cors_headers(request: Request | None = None) -> dict[str, str]:
+    origin = request.headers.get("origin") if request else None
+    allowed_origin = NOTIFY_DEFAULT_CORS_ORIGIN
+    if origin and re.fullmatch(r"https?://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?", origin):
+        allowed_origin = origin
+    return {
+        "Access-Control-Allow-Origin": allowed_origin,
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Vary": "Origin",
+    }
+
+
+def _notify_json(payload: dict[str, Any], status_code: int = 200, request: Request | None = None) -> JSONResponse:
+    return JSONResponse(content=payload, status_code=status_code, headers=_notify_cors_headers(request))
 
 
 def _display_desktop_notification(title: str, message: str) -> bool:
@@ -1054,8 +1071,8 @@ def _notify_health() -> dict[str, Any]:
 @app.options("/notify")
 @app.options("/notify/personality")
 @app.options("/pai")
-def notify_options() -> Response:
-    return Response(status_code=204, headers=NOTIFY_CORS_HEADERS)
+def notify_options(request: Request) -> Response:
+    return Response(status_code=204, headers=_notify_cors_headers(request))
 
 
 @app.get("/")
@@ -1067,8 +1084,8 @@ def root() -> Response:
 
 
 @app.get("/health")
-def notify_health() -> JSONResponse:
-    return _notify_json(_notify_health())
+def notify_health(request: Request) -> JSONResponse:
+    return _notify_json(_notify_health(), request=request)
 
 
 @app.post("/notify")
@@ -1077,8 +1094,8 @@ def notify_health() -> JSONResponse:
 def notify(payload: NotifyPayload, request: Request) -> JSONResponse:
     client_id = _notify_client_id(request)
     if _notify_rate_limited(client_id):
-        return _notify_json({"status": "error", "message": "Rate limit exceeded"}, status_code=429)
-    return _notify_json(_send_notification(payload))
+        return _notify_json({"status": "error", "message": "Rate limit exceeded"}, status_code=429, request=request)
+    return _notify_json(_send_notification(payload), request=request)
 
 
 @app.get("/v1/health")
