@@ -813,15 +813,14 @@ def _apply_pronunciations(text: str) -> str:
 def _sanitize_notify_text(value: str, field: str) -> str:
     if len(value) > NOTIFY_MAX_CHARS:
         raise HTTPException(status_code=400, detail=f"{field} too long (max {NOTIFY_MAX_CHARS} characters)")
-    # Preserve the legacy PAI sanitizer contract for both the desktop banner and
-    # spoken text so old callers keep identical markdown/shell-token cleanup.
+    # Keep markdown/control cleanup shared by the desktop banner and speech.
+    # AppleScript-specific safety is handled later by _escape_for_applescript.
     sanitized = (
         value.replace("\r", " ")
         .replace("\n", " ")
     )
     sanitized = re.sub(r"<script", "", sanitized, flags=re.IGNORECASE)
     sanitized = sanitized.replace("../", "")
-    sanitized = re.sub(r"[;&|><`$\\]", "", sanitized)
     sanitized = re.sub(r"\*\*([^*]+)\*\*", r"\1", sanitized)
     sanitized = re.sub(r"\*([^*]+)\*", r"\1", sanitized)
     sanitized = re.sub(r"`([^`]+)`", r"\1", sanitized)
@@ -1054,6 +1053,8 @@ def _notify_health() -> dict[str, Any]:
     host = os.getenv("AGENT_VOICE_HOST") or "127.0.0.1"
     port = int(os.getenv("AGENT_VOICE_PORT") or "8880")
     local_base_url = f"http://{host}:{port}"
+    with _notify_queue_lock:
+        queue_depth = _notify_queue_depth
     return {
         "status": "healthy",
         "port": port,
@@ -1065,7 +1066,7 @@ def _notify_health() -> dict[str, Any]:
         "pronunciations_path": str(_notify_pronunciations_path()),
         "known_voices": list(VOICE_DESIGNS.keys()),
         "known_voices_source": "local",
-        "voice_queue_depth": _notify_queue_depth,
+        "voice_queue_depth": queue_depth,
         "voice_queue_max_depth": NOTIFY_QUEUE_MAX_DEPTH,
         "rate_limit": NOTIFY_RATE_LIMIT,
         "rate_window_seconds": NOTIFY_RATE_WINDOW_SECONDS,
