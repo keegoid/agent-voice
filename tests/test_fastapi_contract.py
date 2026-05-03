@@ -323,6 +323,35 @@ def test_notify_rate_limit_bounds_trusted_xff_clients(
     )
 
     assert first.status_code == 200
+    assert second.status_code == 200
+    assert set(server._notify_request_counts) == {"198.51.100.2"}
+
+
+def test_notify_rate_limit_falls_back_for_malformed_trusted_xff(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    monkeypatch.setenv("AGENT_VOICE_MUTE_STATE", str(tmp_path / "mute.json"))
+    monkeypatch.setenv("AGENT_VOICE_NOTIFY_TRUST_XFF", "1")
+    monkeypatch.setattr(server, "NOTIFY_RATE_LIMIT", 1)
+    server._notify_request_counts.clear()
+    monkeypatch.setattr(server, "_display_desktop_notification", lambda *_args: True)
+    client = TestClient(locate_fastapi_app())
+
+    first = client.post(
+        "/notify",
+        json={"message": "first", "voice_enabled": False},
+        headers={"X-Forwarded-For": "not-an-ip"},
+    )
+    second = client.post(
+        "/notify",
+        json={"message": "second", "voice_enabled": False},
+        headers={"X-Forwarded-For": "also-not-an-ip"},
+    )
+
+    assert first.status_code == 200
     assert second.status_code == 429
 
 

@@ -170,7 +170,8 @@ Notify playback is serialized and bounded by
 If a trusted local proxy fronts the loopback service, set
 `AGENT_VOICE_NOTIFY_TRUST_XFF=1` to rate-limit by `X-Forwarded-For`.
 `AGENT_VOICE_NOTIFY_RATE_CLIENT_LIMIT=256` bounds the number of remembered
-clients inside each rate-limit window.
+clients inside each rate-limit window. Trusted forwarded headers use the
+left-most valid IP; malformed values fall back to the direct client address.
 
 Mute state:
 

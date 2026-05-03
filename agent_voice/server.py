@@ -90,9 +90,12 @@ _dropped_stt_options_lock = threading.Lock()
 _notify_rate_lock = threading.Lock()
 _notify_queue_lock = threading.Lock()
 _notify_playback_lock = threading.Lock()
+_pronunciation_cache_lock = threading.Lock()
 _logged_dropped_stt_options: set[tuple[str, ...]] = set()
 _notify_request_counts: dict[str, tuple[int, float]] = {}
 _notify_queue_depth = 0
+_pronunciation_cache_key: tuple[str, int, int] | None = None
+_pronunciation_cache_rules: list[tuple[re.Pattern[str], str]] = []
 _QWEN_TRANSFORMERS_CONFIG_WARNING = (
     "You are using a model of type `qwen3_tts` to instantiate a model of type ``."
 )
@@ -780,11 +783,24 @@ def _notify_pronunciations_path() -> Path:
 
 
 def _load_pronunciation_rules() -> list[tuple[re.Pattern[str], str]]:
+    global _pronunciation_cache_key, _pronunciation_cache_rules
+
     path = _notify_pronunciations_path()
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        stat = path.stat()
     except FileNotFoundError:
         return []
+    except OSError as exc:
+        print(f"Failed to stat pronunciation rules from {path}: {exc}", file=sys.stderr)
+        return []
+
+    cache_key = (str(path), stat.st_mtime_ns, stat.st_size)
+    with _pronunciation_cache_lock:
+        if cache_key == _pronunciation_cache_key:
+            return list(_pronunciation_cache_rules)
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         print(f"Failed to load pronunciation rules from {path}: {exc}", file=sys.stderr)
         return []
@@ -802,6 +818,9 @@ def _load_pronunciation_rules() -> list[tuple[re.Pattern[str], str]]:
         if not isinstance(term, str) or not term or not isinstance(phonetic, str):
             continue
         rules.append((re.compile(rf"(?<!\w){re.escape(term)}(?!\w)"), phonetic))
+    with _pronunciation_cache_lock:
+        _pronunciation_cache_key = cache_key
+        _pronunciation_cache_rules = list(rules)
     return rules
 
 
@@ -839,12 +858,14 @@ def _sanitize_notify_text(value: str, field: str, *, preserve_pauses: bool = Fal
 
 
 def _escape_for_applescript(value: str) -> str:
+    value = re.sub(r"[\x00-\x1f\x7f]", " ", value)
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _notify_client_id(request: Request) -> str:
     # The service binds to loopback by default. Only trust proxy-supplied client
     # identity when a local deployment explicitly opts into that proxy contract.
+    direct_client = request.client.host if request.client else "localhost"
     forwarded_for = (
         request.headers.get("x-forwarded-for") if _env_flag("AGENT_VOICE_NOTIFY_TRUST_XFF", False) else None
     )
@@ -852,7 +873,7 @@ def _notify_client_id(request: Request) -> str:
         normalized = _normalize_forwarded_client_id(forwarded_for)
         if normalized:
             return normalized
-    return request.client.host if request.client else "localhost"
+    return direct_client
 
 
 def _normalize_forwarded_client_id(value: str) -> str:
@@ -875,7 +896,8 @@ def _notify_rate_limited(client_id: str) -> bool:
         count, reset_time = _notify_request_counts.get(client_id, (0, 0.0))
         if NOTIFY_RATE_CLIENT_LIMIT > 0 and client_id not in _notify_request_counts:
             if len(_notify_request_counts) >= NOTIFY_RATE_CLIENT_LIMIT:
-                return True
+                oldest = min(_notify_request_counts, key=lambda key: _notify_request_counts[key][1])
+                _notify_request_counts.pop(oldest, None)
         if now > reset_time:
             _notify_request_counts[client_id] = (1, now + NOTIFY_RATE_WINDOW_SECONDS)
             return False
