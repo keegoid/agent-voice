@@ -1,6 +1,3 @@
-<!-- GENERATED from AGENT_GUIDE.md. Do not edit directly. -->
-<!-- Run ops/scripts/sync-agent-guides.sh after editing AGENT_GUIDE.md. -->
-
 # agent-voice Agent Instructions
 
 Global Keegoid instructions still apply (see `~/keegoid/AGENT_GUIDE.md`).
