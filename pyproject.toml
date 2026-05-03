@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mlx = [
-    "mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@efc3bf8c15de96cc935a9bef32666d425171d5df",
+    "mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@b1dae64fff00fa950854db288255ed639b9019e7",
 ]
 
 [dependency-groups]

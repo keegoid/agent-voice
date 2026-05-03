@@ -38,6 +38,13 @@ TTS_MAX_TOKENS = int(os.getenv("AGENT_VOICE_TTS_MAX_TOKENS") or "24000")
 TTS_GENERATION_ATTEMPTS = int(os.getenv("AGENT_VOICE_TTS_GENERATION_ATTEMPTS") or "2")
 TTS_MAX_SEGMENT_CHARS = int(os.getenv("AGENT_VOICE_TTS_MAX_SEGMENT_CHARS") or "1200")
 TTS_SEGMENT_SILENCE_SECONDS = float(os.getenv("AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS") or "0.18")
+TTS_TEMPERATURE = float(os.getenv("AGENT_VOICE_TTS_TEMPERATURE") or "0.9")
+TTS_TOP_P = float(os.getenv("AGENT_VOICE_TTS_TOP_P") or "0.95")
+TTS_REPETITION_PENALTY = float(os.getenv("AGENT_VOICE_TTS_REPETITION_PENALTY") or "1.05")
+TTS_RETRY_TEMPERATURE = float(os.getenv("AGENT_VOICE_TTS_RETRY_TEMPERATURE") or "0.75")
+TTS_RETRY_TOP_P = float(os.getenv("AGENT_VOICE_TTS_RETRY_TOP_P") or "0.9")
+TTS_RETRY_REPETITION_PENALTY = float(os.getenv("AGENT_VOICE_TTS_RETRY_REPETITION_PENALTY") or "1.1")
+TTS_PEAK_LIMIT = float(os.getenv("AGENT_VOICE_TTS_PEAK_LIMIT") or "0.98")
 TTS_SUSPICIOUS_MIN_WORDS = int(os.getenv("AGENT_VOICE_TTS_SUSPICIOUS_MIN_WORDS") or "4")
 TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND = float(
     os.getenv("AGENT_VOICE_TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND") or "5.5"
@@ -269,6 +276,7 @@ def _normalize_tts_response_format(response_format: str) -> str:
 
 def _encode_audio(audio: np.ndarray, sample_rate: int, response_format: str) -> bytes:
     normalized = _normalize_tts_response_format(response_format)
+    audio = _prepare_audio_for_encoding(audio)
     if normalized in {"wav", "flac"}:
         output = io.BytesIO()
         sf.write(output, audio, sample_rate, format=normalized.upper())
@@ -277,6 +285,21 @@ def _encode_audio(audio: np.ndarray, sample_rate: int, response_format: str) -> 
     output = io.BytesIO()
     sf.write(output, audio, sample_rate, format="WAV")
     return _convert_wav_bytes(output.getvalue(), normalized)
+
+
+def _prepare_audio_for_encoding(audio: np.ndarray) -> np.ndarray:
+    samples = np.asarray(audio, dtype=np.float32)
+    if samples.size == 0:
+        return samples
+
+    samples = np.nan_to_num(samples, nan=0.0, posinf=0.0, neginf=0.0)
+    if TTS_PEAK_LIMIT <= 0:
+        return samples
+
+    peak = float(np.max(np.abs(samples)))
+    if peak > TTS_PEAK_LIMIT:
+        samples = samples * (TTS_PEAK_LIMIT / peak)
+    return samples
 
 
 def _muted_audio(response_format: str) -> bytes:
@@ -416,9 +439,7 @@ def _generate_audio_segment_once(
     chunks: list[np.ndarray] = []
     sample_rate = 24000
     token_count = 0
-    temperature = 1.0 if attempt == 0 else 0.85
-    top_p = 1.0 if attempt == 0 else 0.95
-    repetition_penalty = 1.0 if attempt == 0 else 1.05
+    temperature, top_p, repetition_penalty = _tts_sampling_params(attempt)
 
     for result in model.generate_voice_design(
         text=text,
@@ -437,6 +458,12 @@ def _generate_audio_segment_once(
         return np.array([], dtype=np.float32), sample_rate, token_count
 
     return np.concatenate(chunks), sample_rate, token_count
+
+
+def _tts_sampling_params(attempt: int) -> tuple[float, float, float]:
+    if attempt <= 0:
+        return TTS_TEMPERATURE, TTS_TOP_P, TTS_REPETITION_PENALTY
+    return TTS_RETRY_TEMPERATURE, TTS_RETRY_TOP_P, TTS_RETRY_REPETITION_PENALTY
 
 
 def _split_speech_text(text: str, max_segment_chars: int) -> list[str]:

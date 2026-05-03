@@ -30,7 +30,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.135.3" },
-    { name = "mlx-audio", marker = "extra == 'mlx'", git = "https://github.com/Blaizzy/mlx-audio.git?rev=efc3bf8c15de96cc935a9bef32666d425171d5df" },
+    { name = "mlx-audio", marker = "extra == 'mlx'", git = "https://github.com/Blaizzy/mlx-audio.git?rev=b1dae64fff00fa950854db288255ed639b9019e7" },
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "python-multipart", specifier = ">=0.0.20" },
@@ -456,7 +456,7 @@ wheels = [
 [[package]]
 name = "mlx-audio"
 version = "0.4.3"
-source = { git = "https://github.com/Blaizzy/mlx-audio.git?rev=efc3bf8c15de96cc935a9bef32666d425171d5df#efc3bf8c15de96cc935a9bef32666d425171d5df" }
+source = { git = "https://github.com/Blaizzy/mlx-audio.git?rev=b1dae64fff00fa950854db288255ed639b9019e7#b1dae64fff00fa950854db288255ed639b9019e7" }
 dependencies = [
     { name = "huggingface-hub" },
     { name = "miniaudio" },

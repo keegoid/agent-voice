@@ -51,8 +51,14 @@ default.
   - defaults to `AGENT_VOICE_TTS_MAX_TOKENS=24000` and retries suspiciously
     short generated segments once by default, including terse status cues and
     clips that speak only at the beginning then continue as silence.
+  - uses stable Qwen3 sampling defaults (`AGENT_VOICE_TTS_TEMPERATURE=0.9`,
+    `AGENT_VOICE_TTS_TOP_P=0.95`, `AGENT_VOICE_TTS_REPETITION_PENALTY=1.05`)
+    and more conservative `AGENT_VOICE_TTS_RETRY_*` defaults for retries.
   - uses contiguous active-speech duration, not total audio file length, for
     suspiciously short segment detection.
+  - sanitizes non-finite waveform samples and peak-limits generated audio to
+    `AGENT_VOICE_TTS_PEAK_LIMIT=0.98` before WAV/FLAC encoding or ffmpeg
+    transcoding.
   - inserts `AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS=0.18` seconds of silence
     between generated segments by default.
   - returns generated audio bytes with the correct audio media type.
@@ -88,6 +94,8 @@ Public voice names are:
 
 - `anime_genki`
 - `anime_villain`
+- `cool_figment_rain_voice_locked`
+- `cool_street_deadpan_voice_locked`
 - `cyberpunk_cool`
 - `peng_mythic`
 - `anime_sultry`
