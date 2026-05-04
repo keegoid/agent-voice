@@ -678,6 +678,79 @@ def test_generate_audio_retries_suspiciously_short_status_clip(monkeypatch: pyte
     assert calls == 2
 
 
+def test_generate_audio_retries_suspiciously_long_status_clip(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    calls = 0
+    sample_rate = 24000
+
+    class FakeResult:
+        sample_rate = 24000
+        token_count = 100
+
+        def __init__(self, audio: Any) -> None:
+            self.audio = audio
+
+    class FakeModel:
+        def generate_voice_design(self, **_kwargs: Any) -> list[FakeResult]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return [FakeResult(server.np.full(sample_rate * 181, 0.1, dtype=server.np.float32))]
+            return [FakeResult(server.np.full(sample_rate * 5, 0.1, dtype=server.np.float32))]
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+    monkeypatch.setattr(server, "TTS_MAX_OUTPUT_SECONDS", 180.0)
+
+    audio = server.generate_audio(
+        text="Short status should never produce several minutes of audio",
+        instruct="clear voice",
+        language="English",
+        response_format="wav",
+        max_tokens=123,
+    )
+
+    with wave.open(io.BytesIO(audio), "rb") as wav:
+        duration = wav.getnframes() / wav.getframerate()
+
+    assert calls == 2
+    assert duration == pytest.approx(5.0)
+
+
+def test_audio_speech_returns_502_after_suspiciously_long_retry_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = locate_fastapi_app()
+    import agent_voice.server as server
+
+    calls = 0
+    sample_rate = 24000
+
+    class FakeResult:
+        sample_rate = 24000
+        token_count = 100
+
+        def __init__(self, audio: Any) -> None:
+            self.audio = audio
+
+    class FakeModel:
+        def generate_voice_design(self, **_kwargs: Any) -> list[FakeResult]:
+            nonlocal calls
+            calls += 1
+            return [FakeResult(server.np.full(sample_rate * 181, 0.1, dtype=server.np.float32))]
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+    monkeypatch.setattr(server, "TTS_MAX_OUTPUT_SECONDS", 180.0)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={"input": "Short status should not run for minutes", "voice": "cyberpunk_cool"},
+    )
+
+    assert response.status_code == 502
+    assert "suspiciously long audio" in response.json()["detail"]
+    assert calls == 2
+
+
 def test_generate_audio_uses_stable_sampling_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     import agent_voice.server as server
 
