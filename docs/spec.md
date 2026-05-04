@@ -161,7 +161,9 @@ Public voice names are:
   `--max-playback-seconds`, `--no-play`, and `--help`.
 - refuses to play generated WAVs longer than 180 seconds by default. The
   `AGENT_VOICE_MAX_PLAYBACK_SECONDS` environment variable overrides that cap,
-  and setting it to `0` disables this refusal guard.
+  and setting it to `0` disables this refusal guard. When the guard fires, the
+  helper exits with code 64 so direct callers can distinguish refusal from
+  successful playback.
 - bounds `afplay` runtime with a duration-aware timeout capped by the playback
   limit by default. The `AGENT_VOICE_PLAYBACK_TIMEOUT_SECONDS` environment
   variable overrides that wait after playback starts.

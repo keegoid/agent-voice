@@ -270,9 +270,7 @@ PY
 }
 
 if [[ "$play" -eq 1 ]]; then
-  if ! validate_playback_duration; then
-    exit 0
-  fi
+  validate_playback_duration
   play_wav
 fi
 

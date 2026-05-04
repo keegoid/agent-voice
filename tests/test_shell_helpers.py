@@ -171,9 +171,8 @@ def test_agent_voice_summary_allows_custom_instruct_without_listed_voice(tmp_pat
     assert request["instruct"] == "Speak warmly and clearly."
 
 
-def _wav_bytes(duration_seconds: float, *, sample_rate: int = 24_000) -> bytes:
-    wav_path = Path.cwd() / ".pytest_cache" / "agent-voice-test.wav"
-    wav_path.parent.mkdir(exist_ok=True)
+def _wav_bytes(tmp_path: Path, duration_seconds: float, *, sample_rate: int = 24_000) -> bytes:
+    wav_path = tmp_path / "agent-voice-test.wav"
     with wave.open(str(wav_path), "wb") as audio:
         audio.setnchannels(1)
         audio.setsampwidth(2)
@@ -227,13 +226,13 @@ def test_agent_voice_summary_refuses_to_play_wav_over_three_minutes(tmp_path: Pa
         """,
     )
 
-    with MockSpeechServer(audio=_wav_bytes(181)) as server:
+    with MockSpeechServer(audio=_wav_bytes(tmp_path, 181)) as server:
         result = run_with_home(
             [str(helper), "--server", server.url, "short voice cue"],
             tmp_path,
         )
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 64
     assert "Refusing suspiciously long TTS output" in result.stderr
     assert not played.exists()
 
@@ -251,7 +250,7 @@ def test_agent_voice_summary_allows_three_minute_playback_cap_override(tmp_path:
         """,
     )
 
-    with MockSpeechServer(audio=_wav_bytes(181)) as server:
+    with MockSpeechServer(audio=_wav_bytes(tmp_path, 181)) as server:
         result = run_with_home(
             [str(helper), "--server", server.url, "--max-playback-seconds", "240", "short voice cue"],
             tmp_path,
