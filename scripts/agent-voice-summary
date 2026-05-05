@@ -7,6 +7,7 @@ server_url="${AGENT_VOICE_SERVER:-http://127.0.0.1:8880}"
 voice="${AGENT_VOICE_VOICE:-cyberpunk_cool}"
 speech_timeout="${AGENT_VOICE_SPEECH_TIMEOUT_SECONDS:-600}"
 playback_timeout="${AGENT_VOICE_PLAYBACK_TIMEOUT_SECONDS:-}"
+max_playback_seconds="${AGENT_VOICE_MAX_PLAYBACK_SECONDS:-180}"
 max_tokens="${AGENT_VOICE_TTS_MAX_TOKENS:-}"
 instruct=""
 output=""
@@ -24,7 +25,10 @@ Options:
   --max-tokens N        Per-request TTS token budget.
   -s, --server URL      TTS server URL. Default: http://127.0.0.1:8880.
   -o, --output PATH     Save WAV to PATH instead of a temp file.
-  --play-timeout N      Max playback seconds. Default: WAV duration plus grace.
+  --play-timeout N      Max afplay wait seconds after playback starts.
+  --max-playback-seconds N
+                         Refuse to play generated WAVs longer than N seconds.
+                         Default: 180. Set 0 to disable this guard.
   --no-play             Generate WAV but do not play it.
   -h, --help            Show this help.
 USAGE
@@ -55,6 +59,11 @@ while [[ $# -gt 0 ]]; do
     --play-timeout)
       [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
       playback_timeout="$2"
+      shift 2
+      ;;
+    --max-playback-seconds)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
+      max_playback_seconds="$2"
       shift 2
       ;;
     -o|--output)
@@ -108,6 +117,10 @@ if ! [[ "$speech_timeout" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
 fi
 if [[ "$play" -eq 1 && -n "$playback_timeout" && ! "$playback_timeout" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "Playback timeout must be a positive number of seconds" >&2
+  exit 2
+fi
+if [[ "$play" -eq 1 && ! "$max_playback_seconds" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "Max playback seconds must be a non-negative number of seconds" >&2
   exit 2
 fi
 
@@ -198,12 +211,33 @@ default_playback_timeout() {
     echo 120
     return
   fi
-  "$playback_python" - "$duration" <<'PY'
+  "$playback_python" - "$duration" "$max_playback_seconds" <<'PY'
 import math
 import sys
 
 duration = float(sys.argv[1])
-print(max(30, math.ceil(duration + 15)))
+max_playback = float(sys.argv[2])
+if max_playback > 0:
+    print(max(1, math.ceil(min(duration + 15, max_playback))))
+else:
+    print(max(30, math.ceil(duration + 15)))
+PY
+}
+
+validate_playback_duration() {
+  duration="$(wav_duration 2>/dev/null || true)"
+  [[ -n "$duration" ]] || return 0
+  "$playback_python" - "$duration" "$max_playback_seconds" <<'PY'
+import sys
+
+duration = float(sys.argv[1])
+max_playback = float(sys.argv[2])
+if max_playback > 0 and duration > max_playback:
+    print(
+        f"Refusing suspiciously long TTS output: duration={duration:.3f}s exceeds max_playback_seconds={max_playback:g}s",
+        file=sys.stderr,
+    )
+    sys.exit(64)
 PY
 }
 
@@ -236,6 +270,7 @@ PY
 }
 
 if [[ "$play" -eq 1 ]]; then
+  validate_playback_duration
   play_wav
 fi
 

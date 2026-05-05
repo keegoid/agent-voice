@@ -120,9 +120,12 @@ logs and exits successfully so the calling task can continue.
 While muted, `/v1/audio/speech` returns valid silent audio without loading the
 TTS model, and `agent-voice-summary` exits before generating or playing audio.
 Use `AGENT_VOICE_*` environment variables for configuration.
-Playback is bounded separately from generation: `agent-voice-summary` defaults
-to a playback timeout based on the generated WAV duration plus grace, and
-`AGENT_VOICE_PLAYBACK_TIMEOUT_SECONDS` or `--play-timeout` can override it.
+Playback is bounded separately from generation: `agent-voice-summary` refuses to
+play generated WAVs longer than 180 seconds by default and exits with code 64
+when that guard fires, then bounds `afplay` with a timeout capped by that same
+limit. Use `AGENT_VOICE_MAX_PLAYBACK_SECONDS` or `--max-playback-seconds` to
+change the refusal cap, and `AGENT_VOICE_PLAYBACK_TIMEOUT_SECONDS` or
+`--play-timeout` to override only the `afplay` wait once playback starts.
 
 Uninstall removes only shims that point at the managed `agent-voice` install. If
 an earlier shim was backed up during install, uninstall restores that previous

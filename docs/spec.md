@@ -157,11 +157,16 @@ Public voice names are:
   to `/v1/audio/speech`.
 - exits successfully without generating or playing audio when `/v1/health`
   reports `muted: true`.
-- supports `--voice`, `--server`, `--output`, `--play-timeout`, `--no-play`,
-  and `--help`.
-- bounds `afplay` runtime with a duration-aware timeout by default. The
-  `AGENT_VOICE_PLAYBACK_TIMEOUT_SECONDS` environment variable overrides that
-  default.
+- supports `--voice`, `--server`, `--output`, `--play-timeout`,
+  `--max-playback-seconds`, `--no-play`, and `--help`.
+- refuses to play generated WAVs longer than 180 seconds by default. The
+  `AGENT_VOICE_MAX_PLAYBACK_SECONDS` environment variable overrides that cap,
+  and setting it to `0` disables this refusal guard. When the guard fires, the
+  helper exits with code 64 so direct callers can distinguish refusal from
+  successful playback.
+- bounds `afplay` runtime with a duration-aware timeout capped by the playback
+  limit by default. The `AGENT_VOICE_PLAYBACK_TIMEOUT_SECONDS` environment
+  variable overrides that wait after playback starts.
 - writes the output path only when `--output` is used.
 
 `agent-speak` is the safe helper. It:

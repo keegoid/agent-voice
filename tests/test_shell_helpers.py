@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import textwrap
+import wave
 from pathlib import Path
 
 from tests.helpers.public_contract import MockSpeechServer, make_fake_bin, require_executable, run_with_home
@@ -170,6 +171,18 @@ def test_agent_voice_summary_allows_custom_instruct_without_listed_voice(tmp_pat
     assert request["instruct"] == "Speak warmly and clearly."
 
 
+def _wav_bytes(tmp_path: Path, duration_seconds: float, *, sample_rate: int = 24_000) -> bytes:
+    wav_path = tmp_path / "agent-voice-test.wav"
+    with wave.open(str(wav_path), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(sample_rate)
+        audio.writeframes(b"\0\0" * int(duration_seconds * sample_rate))
+    data = wav_path.read_bytes()
+    wav_path.unlink(missing_ok=True)
+    return data
+
+
 def test_agent_voice_summary_times_out_hung_afplay(tmp_path: Path) -> None:
     helper = require_executable("agent-voice-summary")
     fake_bin = tmp_path / "home" / ".local" / "bin"
@@ -198,6 +211,53 @@ def test_agent_voice_summary_times_out_hung_afplay(tmp_path: Path) -> None:
 
     assert result.returncode == 124
     assert "afplay timed out" in result.stderr
+
+
+def test_agent_voice_summary_refuses_to_play_wav_over_three_minutes(tmp_path: Path) -> None:
+    helper = require_executable("agent-voice-summary")
+    fake_bin = tmp_path / "home" / ".local" / "bin"
+    played = tmp_path / "played.txt"
+    make_fake_bin(
+        fake_bin,
+        "afplay",
+        f"""
+        #!/usr/bin/env bash
+        printf played > "{played}"
+        """,
+    )
+
+    with MockSpeechServer(audio=_wav_bytes(tmp_path, 181)) as server:
+        result = run_with_home(
+            [str(helper), "--server", server.url, "short voice cue"],
+            tmp_path,
+        )
+
+    assert result.returncode == 64
+    assert "Refusing suspiciously long TTS output" in result.stderr
+    assert not played.exists()
+
+
+def test_agent_voice_summary_allows_three_minute_playback_cap_override(tmp_path: Path) -> None:
+    helper = require_executable("agent-voice-summary")
+    fake_bin = tmp_path / "home" / ".local" / "bin"
+    seen_path = tmp_path / "played-path.txt"
+    make_fake_bin(
+        fake_bin,
+        "afplay",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s' "$1" > "{seen_path}"
+        """,
+    )
+
+    with MockSpeechServer(audio=_wav_bytes(tmp_path, 181)) as server:
+        result = run_with_home(
+            [str(helper), "--server", server.url, "--max-playback-seconds", "240", "short voice cue"],
+            tmp_path,
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert seen_path.read_text(encoding="utf-8").endswith(".wav")
 
 
 def test_agent_voice_summary_uses_wav_suffix_for_temp_playback(tmp_path: Path) -> None:
