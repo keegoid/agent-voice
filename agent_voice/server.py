@@ -53,6 +53,7 @@ TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND = float(
     os.getenv("AGENT_VOICE_TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND") or "5.5"
 )
 TTS_SUSPICIOUS_MIN_SECONDS = float(os.getenv("AGENT_VOICE_TTS_SUSPICIOUS_MIN_SECONDS") or "1.0")
+TTS_MAX_OUTPUT_SECONDS = float(os.getenv("AGENT_VOICE_TTS_MAX_OUTPUT_SECONDS") or "180")
 TTS_ACTIVITY_WINDOW_SECONDS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_WINDOW_SECONDS") or "0.25")
 TTS_ACTIVITY_MIN_RMS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_MIN_RMS") or "0.004")
 TTS_ACTIVITY_RELATIVE_RMS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_RELATIVE_RMS") or "0.08")
@@ -104,6 +105,10 @@ _MLX_WHISPER_PROCESSOR_WARNING = r"Could not load WhisperProcessor: .*"
 
 class AudioFormatError(RuntimeError):
     """Raised when requested response audio encoding cannot be produced."""
+
+
+class SuspiciousTTSOutputError(RuntimeError):
+    """Raised when generated speech is implausibly long for the requested text."""
 
 
 @dataclass(frozen=True)
@@ -411,6 +416,22 @@ def _generate_audio_segment(
             best_audio = audio
             best_sample_rate = sample_rate
             best_active_seconds = activity.active_seconds
+        if _is_suspiciously_long_audio(text, audio, sample_rate):
+            if attempt < attempts - 1:
+                print(
+                    "Retrying suspiciously long TTS segment "
+                    f"(attempt={attempt + 1}, words={_word_count(text)}, "
+                    f"duration_seconds={activity.duration_seconds:.2f}, "
+                    f"max_seconds={_max_reasonable_audio_seconds(text):.2f}, "
+                    f"tokens={token_count})",
+                    file=sys.stderr,
+                )
+                continue
+            raise SuspiciousTTSOutputError(
+                "TTS generated suspiciously long audio "
+                f"(words={_word_count(text)}, duration_seconds={activity.duration_seconds:.2f}, "
+                f"max_seconds={_max_reasonable_audio_seconds(text):.2f})"
+            )
         if not _is_suspiciously_short_audio(text, audio, sample_rate):
             return audio, sample_rate
         if attempt < attempts - 1:
@@ -577,6 +598,21 @@ def _is_suspiciously_short_audio(text: str, audio: np.ndarray, sample_rate: int)
         words / TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND,
     )
     return activity.active_seconds < min_reasonable_seconds
+
+
+def _max_reasonable_audio_seconds(text: str) -> float:
+    if TTS_MAX_OUTPUT_SECONDS <= 0:
+        return float("inf")
+    words = _word_count(text)
+    expected_seconds = max(8.0, words / 1.8 + 8.0)
+    return min(TTS_MAX_OUTPUT_SECONDS, expected_seconds * 4.0)
+
+
+def _is_suspiciously_long_audio(text: str, audio: np.ndarray, sample_rate: int) -> bool:
+    if sample_rate <= 0 or audio.size == 0:
+        return False
+    activity = _audio_activity(audio, sample_rate)
+    return activity.duration_seconds > _max_reasonable_audio_seconds(text)
 
 
 def _trim_trailing_inactive_audio(audio: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -1230,6 +1266,8 @@ def audio_speech(request: RequestPayload) -> Response:
         )
     except AudioFormatError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SuspiciousTTSOutputError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:
