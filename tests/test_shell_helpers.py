@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import textwrap
 import threading
@@ -155,6 +156,49 @@ def test_agent_speak_resolves_paperclip_speaker_label_from_api(tmp_path: Path) -
     assert capture.read_text(encoding="utf-8").strip() == "DEV keegoid-codex. opening the PR"
     assert "/api/agents/me" in server.requests
     assert "/api/companies/company-1" in server.requests
+
+
+def test_agent_speak_does_not_send_token_to_untrusted_paperclip_api_url(tmp_path: Path) -> None:
+    agent_speak = require_executable("agent-speak")
+    capture = tmp_path / "spoken.txt"
+    curl_log = tmp_path / "curl.log"
+    fake_bin = tmp_path / "bin"
+    helper = make_fake_bin(
+        fake_bin,
+        "fake-voice-helper",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s\\n' "$*" >> "{capture}"
+        """,
+    )
+    make_fake_bin(
+        fake_bin,
+        "curl",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s\\n' "$*" >> "{curl_log}"
+        exit 99
+        """,
+    )
+
+    result = run_with_home(
+        [str(agent_speak), "opening the PR"],
+        tmp_path,
+        extra_env={
+            "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+            "AGENT_VOICE_HELPER": str(helper),
+            "AGENT_VOICE_SPEAK_SYNC": "1",
+            "AGENT_VOICE_SPEAK_LOCK": str(tmp_path / "speak.lock"),
+            "PAPERCLIP_AGENT_ID": "agent-1",
+            "PAPERCLIP_COMPANY_ID": "company-1",
+            "PAPERCLIP_API_URL": "https://attacker.example",
+            "PAPERCLIP_API_KEY": "secret-token",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert capture.read_text(encoding="utf-8").strip() == "opening the PR"
+    assert not curl_log.exists()
 
 
 def test_agent_voice_summary_rejects_empty_input(tmp_path: Path) -> None:

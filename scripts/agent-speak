@@ -60,6 +60,62 @@ json_string_field() {
   jq -r "$filter // empty" <<<"$payload" 2>/dev/null
 }
 
+trim_paperclip_api_url() {
+  local url="$1"
+  url="${url#"${url%%[![:space:]]*}"}"
+  url="${url%"${url##*[![:space:]]}"}"
+  [[ -n "$url" && "$url" != *[[:space:]]* ]] || return 1
+  printf '%s' "${url%/}"
+}
+
+paperclip_api_origin() {
+  local url="$1"
+  local scheme rest authority
+
+  case "$url" in
+    http://*)
+      scheme="http"
+      rest="${url#http://}"
+      ;;
+    https://*)
+      scheme="https"
+      rest="${url#https://}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  authority="${rest%%/*}"
+  [[ -n "$authority" && "$authority" != *"@"* ]] || return 1
+  printf '%s://%s' "$scheme" "$authority" | tr '[:upper:]' '[:lower:]'
+}
+
+paperclip_api_origin_is_trusted() {
+  local origin="$1"
+  if [[ "$origin" == "http://[::1]" || "$origin" == http://\[::1\]:* ]]; then
+    return 0
+  fi
+  case "$origin" in
+    http://127.0.0.1|http://127.0.0.1:*|http://localhost|http://localhost:*)
+      return 0
+      ;;
+    https://paperclip.ing|https://paperclip.ing:*|https://*.paperclip.ing|https://*.paperclip.ing:*)
+      return 0
+      ;;
+    https://paperclip-hooks.keegoid.com|https://paperclip-hooks.keegoid.com:*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+paperclip_api_url_is_trusted() {
+  local origin
+  origin="$(paperclip_api_origin "$1")" || return 1
+  paperclip_api_origin_is_trusted "$origin"
+}
+
 speaker_descriptor_has_company_prefix() {
   local descriptor="$1"
   local prefix="$2"
@@ -120,7 +176,8 @@ fetch_paperclip_speaker_label() {
   command -v curl >/dev/null 2>&1 || return 1
   command -v jq >/dev/null 2>&1 || return 1
 
-  api_url="${PAPERCLIP_API_URL%/}"
+  api_url="$(trim_paperclip_api_url "$PAPERCLIP_API_URL")" || return 1
+  paperclip_api_url_is_trusted "$api_url" || return 1
   token="$PAPERCLIP_API_KEY"
   timeout="${AGENT_VOICE_PAPERCLIP_LABEL_TIMEOUT_SECONDS:-2}"
 
