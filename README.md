@@ -76,7 +76,7 @@ The Whisper MLX repository does not ship the processor metadata that
 experiments; treat it as trust-sensitive because it controls Hugging Face model
 loading.
 
-Speech generation defaults to `AGENT_VOICE_TTS_MAX_TOKENS=24000`. There is no
+Speech generation defaults to `AGENT_VOICE_TTS_MAX_TOKENS=1200`. There is no
 request character cap; long requests are split into bounded synthesis segments
 and concatenated so agent summaries can stay useful without caller-side
 trimming. If a generated segment is implausibly short for the text length, the
@@ -195,7 +195,7 @@ Speech:
 ```bash
 curl -fsS http://127.0.0.1:8880/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3-tts","input":"The agent finished the task.","voice":"cyberpunk_cool","response_format":"wav","max_tokens":24000}' \
+  -d '{"model":"qwen3-tts","input":"The agent finished the task.","voice":"cyberpunk_cool","response_format":"wav","max_tokens":1200}' \
   -o speech.wav
 ```
 

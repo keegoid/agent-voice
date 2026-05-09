@@ -37,7 +37,7 @@ STT_MODEL_ID = "mlx-community/whisper-large-v3-mlx"
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 STT_PROCESSOR_ID = os.getenv("AGENT_VOICE_STT_PROCESSOR_ID", "openai/whisper-large-v3")
-TTS_MAX_TOKENS = int(os.getenv("AGENT_VOICE_TTS_MAX_TOKENS") or "24000")
+TTS_MAX_TOKENS = int(os.getenv("AGENT_VOICE_TTS_MAX_TOKENS") or "1200")
 TTS_GENERATION_ATTEMPTS = int(os.getenv("AGENT_VOICE_TTS_GENERATION_ATTEMPTS") or "2")
 TTS_MAX_SEGMENT_CHARS = int(os.getenv("AGENT_VOICE_TTS_MAX_SEGMENT_CHARS") or "1200")
 TTS_SEGMENT_SILENCE_SECONDS = float(os.getenv("AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS") or "0.18")

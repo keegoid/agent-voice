@@ -84,7 +84,7 @@ default.
   - does not impose a request character cap. Long requests may be split into
     multiple synthesis segments server-side and concatenated into one response
     audio file.
-  - defaults to `AGENT_VOICE_TTS_MAX_TOKENS=24000` and retries suspiciously
+  - defaults to `AGENT_VOICE_TTS_MAX_TOKENS=1200` and retries suspiciously
     short generated segments once by default, including terse status cues and
     clips that speak only at the beginning then continue as silence.
   - uses stable Qwen3 sampling defaults (`AGENT_VOICE_TTS_TEMPERATURE=0.9`,

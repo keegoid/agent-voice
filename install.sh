@@ -296,6 +296,8 @@ write_plist() {
     <string>$MODEL_CACHE/huggingface</string>
     <key>AGENT_VOICE_HOME</key>
     <string>$STATE_DIR</string>
+    <key>AGENT_VOICE_TTS_MAX_TOKENS</key>
+    <string>1200</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
