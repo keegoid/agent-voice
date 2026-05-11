@@ -82,7 +82,9 @@ and concatenated so agent summaries can stay useful without caller-side
 trimming. If a generated segment is implausibly short for the text length, the
 server retries it once with more conservative sampling. The short-clip detector
 also covers terse agent status cues and clips that speak only at the beginning
-then continue as silence. Tune it with
+then continue as silence. If retry and sentence-level fallback still look
+collapsed, the server rejects the clip instead of returning playable audio.
+Tune it with
 `AGENT_VOICE_TTS_SUSPICIOUS_MIN_WORDS`,
 `AGENT_VOICE_TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND`, and
 `AGENT_VOICE_TTS_SUSPICIOUS_MIN_SECONDS` if needed. The detector measures
@@ -120,6 +122,9 @@ When `agent-speak` runs inside Paperclip with `PAPERCLIP_*` runtime variables,
 it prepends a concise speaker label such as `DEV CEO` or `DEV keegoid-codex`
 to the spoken text. Set `AGENT_VOICE_SPEAKER_LABEL` to override that label, or
 `AGENT_VOICE_SPEAKER_LABEL_ENABLED=0` to disable prefixing.
+To avoid stale audio backlog, concurrent `agent-speak` calls wait up to five
+seconds for the voice lock by default, then skip. Override with
+`AGENT_VOICE_SPEAK_LOCK_WAIT_SECONDS`.
 `agent-voice mute` is a persistent master mute for local speech generation.
 While muted, `/v1/audio/speech` returns valid silent audio without loading the
 TTS model, and `agent-voice-summary` exits before generating or playing audio.

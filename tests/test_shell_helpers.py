@@ -74,6 +74,39 @@ def test_agent_speak_does_not_duplicate_existing_label(tmp_path: Path) -> None:
     assert capture.read_text(encoding="utf-8").strip() == "DEV CEO. already labeled"
 
 
+def test_agent_speak_skips_when_voice_lock_is_busy(tmp_path: Path) -> None:
+    agent_speak = require_executable("agent-speak")
+    capture = tmp_path / "spoken.txt"
+    log = tmp_path / "agent-speak.log"
+    lock = tmp_path / "speak.lock"
+    lock.mkdir()
+    (lock / "pid").write_text(str(os.getpid()), encoding="utf-8")
+    helper = make_fake_bin(
+        tmp_path / "bin",
+        "fake-voice-helper",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s\\n' "$*" >> "{capture}"
+        """,
+    )
+
+    result = run_with_home(
+        [str(agent_speak), "hello from tests"],
+        tmp_path,
+        extra_env={
+            "AGENT_VOICE_HELPER": str(helper),
+            "AGENT_VOICE_SPEAK_SYNC": "1",
+            "AGENT_VOICE_SPEAK_LOCK": str(lock),
+            "AGENT_VOICE_SPEAK_LOCK_WAIT_SECONDS": "0",
+            "AGENT_VOICE_SPEAK_LOG": str(log),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not capture.exists()
+    assert "voice lock busy" in log.read_text(encoding="utf-8")
+
+
 class MockPaperclipServer:
     def __init__(self) -> None:
         self.requests: list[str] = []

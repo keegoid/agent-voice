@@ -108,7 +108,7 @@ class AudioFormatError(RuntimeError):
 
 
 class SuspiciousTTSOutputError(RuntimeError):
-    """Raised when generated speech is implausibly long for the requested text."""
+    """Raised when generated speech is implausibly short or long for the requested text."""
 
 
 @dataclass(frozen=True)
@@ -393,6 +393,8 @@ def _generate_audio_segment(
     instruct: str,
     language: str,
     max_tokens: int,
+    *,
+    allow_suspicious_short: bool = False,
 ) -> tuple[np.ndarray, int]:
     attempts = max(1, TTS_GENERATION_ATTEMPTS)
     best_audio = np.array([], dtype=np.float32)
@@ -444,7 +446,10 @@ def _generate_audio_segment(
                 file=sys.stderr,
             )
 
-    return best_audio, best_sample_rate
+    if allow_suspicious_short:
+        return best_audio, best_sample_rate
+
+    raise _suspiciously_short_output_error(text, best_audio, best_sample_rate)
 
 
 def _generate_audio_parts_for_segment(
@@ -460,13 +465,14 @@ def _generate_audio_parts_for_segment(
         instruct=instruct,
         language=language,
         max_tokens=max_tokens,
+        allow_suspicious_short=True,
     )
     if not _is_suspiciously_short_audio(text, audio, sample_rate):
         return [(audio, sample_rate)]
 
     fallback_segments = _split_speech_text_at_sentence_boundaries(text, TTS_MAX_SEGMENT_CHARS)
     if len(fallback_segments) <= 1:
-        return [(audio, sample_rate)]
+        raise _suspiciously_short_output_error(text, audio, sample_rate)
 
     print(
         "Falling back to sentence-level TTS after collapsed continuous segment "
@@ -598,6 +604,21 @@ def _is_suspiciously_short_audio(text: str, audio: np.ndarray, sample_rate: int)
         words / TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND,
     )
     return activity.active_seconds < min_reasonable_seconds
+
+
+def _suspiciously_short_output_error(text: str, audio: np.ndarray, sample_rate: int) -> SuspiciousTTSOutputError:
+    activity = _audio_activity(audio, sample_rate)
+    words = _word_count(text)
+    min_reasonable_seconds = max(
+        TTS_SUSPICIOUS_MIN_SECONDS,
+        words / TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND,
+    )
+    return SuspiciousTTSOutputError(
+        "TTS generated suspiciously short audio "
+        f"(words={words}, active_seconds={activity.active_seconds:.2f}, "
+        f"duration_seconds={activity.duration_seconds:.2f}, "
+        f"min_seconds={min_reasonable_seconds:.2f})"
+    )
 
 
 def _max_reasonable_audio_seconds(text: str) -> float:

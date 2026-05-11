@@ -511,7 +511,7 @@ def test_generate_audio_transcodes_mp3_with_ffmpeg(monkeypatch: pytest.MonkeyPat
     seen: dict[str, Any] = {}
 
     class FakeResult:
-        audio = [0.0] * 2400
+        audio = [0.1] * 48000
         sample_rate = 24000
         token_count = 100
 
@@ -571,7 +571,7 @@ def test_generate_audio_uses_configured_tts_token_budget(monkeypatch: pytest.Mon
     seen: dict[str, Any] = {}
 
     class FakeResult:
-        audio = [0.0] * 2400
+        audio = [0.1] * 48000
         sample_rate = 24000
         token_count = 100
 
@@ -648,21 +648,22 @@ def test_generate_audio_retries_suspiciously_short_status_clip(monkeypatch: pyte
     import agent_voice.server as server
 
     calls = 0
+    sample_rate = 24000
 
     class FakeResult:
         sample_rate = 24000
         token_count = 100
 
-        def __init__(self, samples: int) -> None:
-            self.audio = [0.0] * samples
+        def __init__(self, audio: Any) -> None:
+            self.audio = audio
 
     class FakeModel:
         def generate_voice_design(self, **_kwargs: Any) -> list[FakeResult]:
             nonlocal calls
             calls += 1
             if calls == 1:
-                return [FakeResult(1200)]
-            return [FakeResult(48000)]
+                return [FakeResult(server.np.zeros(1200, dtype=server.np.float32))]
+            return [FakeResult(server.np.full(sample_rate * 2, 0.1, dtype=server.np.float32))]
 
     monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
 
@@ -675,6 +676,39 @@ def test_generate_audio_retries_suspiciously_short_status_clip(monkeypatch: pyte
     )
 
     assert audio.startswith(b"RIFF")
+    assert calls == 2
+
+
+def test_audio_speech_returns_502_after_suspiciously_short_retry_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = locate_fastapi_app()
+    import agent_voice.server as server
+
+    calls = 0
+    sample_rate = 24000
+
+    class FakeResult:
+        sample_rate = 24000
+        token_count = 100
+
+        def __init__(self, audio: Any) -> None:
+            self.audio = audio
+
+    class FakeModel:
+        def generate_voice_design(self, **_kwargs: Any) -> list[FakeResult]:
+            nonlocal calls
+            calls += 1
+            return [FakeResult(server.np.zeros(sample_rate // 2, dtype=server.np.float32))]
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={"input": "This status should not play a clipped half second output", "voice": "cyberpunk_cool"},
+    )
+
+    assert response.status_code == 502
+    assert "suspiciously short audio" in response.json()["detail"]
     assert calls == 2
 
 
