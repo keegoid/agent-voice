@@ -284,7 +284,7 @@ find_speech_arg_index() {
 
 run_worker() {
   lock="${AGENT_VOICE_SPEAK_LOCK:-${TMPDIR:-/tmp}/agent-speak.lock}"
-  wait_seconds="${AGENT_VOICE_SPEAK_LOCK_WAIT_SECONDS:-120}"
+  wait_seconds="${AGENT_VOICE_SPEAK_LOCK_WAIT_SECONDS:-5}"
   deadline=$((SECONDS + wait_seconds))
   speech_args=("$@")
   speaker_label=""

@@ -84,9 +84,11 @@ default.
   - does not impose a request character cap. Long requests may be split into
     multiple synthesis segments server-side and concatenated into one response
     audio file.
-  - defaults to `AGENT_VOICE_TTS_MAX_TOKENS=24000` and retries suspiciously
+  - defaults to `AGENT_VOICE_TTS_MAX_TOKENS=1200` and retries suspiciously
     short generated segments once by default, including terse status cues and
-    clips that speak only at the beginning then continue as silence.
+    clips that speak only at the beginning then continue as silence. If retry
+    and sentence-level fallback still look collapsed, rejects the segment
+    instead of returning playable audio.
   - uses stable Qwen3 sampling defaults (`AGENT_VOICE_TTS_TEMPERATURE=0.9`,
     `AGENT_VOICE_TTS_TOP_P=0.95`, `AGENT_VOICE_TTS_REPETITION_PENALTY=1.05`)
     and more conservative `AGENT_VOICE_TTS_RETRY_*` defaults for retries.
@@ -174,6 +176,9 @@ Public voice names are:
 - exits successfully without speaking when called with no arguments.
 - exits successfully if its strict helper is missing or not executable.
 - runs the strict helper asynchronously by default.
+- waits up to five seconds for another `agent-speak` playback lock by default,
+  then skips instead of queuing stale voice. `AGENT_VOICE_SPEAK_LOCK_WAIT_SECONDS`
+  overrides the wait.
 - logs best-effort worker activity.
 - never fails the caller because TTS is offline or unavailable.
 
