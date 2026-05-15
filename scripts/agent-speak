@@ -241,17 +241,59 @@ text_already_has_speaker_label() {
   return 1
 }
 
+# Walks "$@" using the agent-voice-summary flag schema and prints the 0-based
+# index of the first positional (text) argument, or -1 if none. Keeps label
+# injection working when callers prepend flags like `--voice X "text"`.
+find_speech_arg_index() {
+  local i=0 arg
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      --)
+        if [[ $# -ge 2 ]]; then
+          printf '%d' "$((i + 1))"
+        else
+          printf '%d' -1
+        fi
+        return 0
+        ;;
+      -v|--voice|-s|--server|-i|--instruct|--max-tokens|--play-timeout|-o|--output)
+        if [[ $# -lt 2 ]]; then
+          printf '%d' -1
+          return 0
+        fi
+        shift 2
+        i=$((i + 2))
+        ;;
+      --no-play|-h|--help)
+        shift
+        i=$((i + 1))
+        ;;
+      -*)
+        shift
+        i=$((i + 1))
+        ;;
+      *)
+        printf '%d' "$i"
+        return 0
+        ;;
+    esac
+  done
+  printf '%d' -1
+}
+
 run_worker() {
   lock="${AGENT_VOICE_SPEAK_LOCK:-${TMPDIR:-/tmp}/agent-speak.lock}"
   wait_seconds="${AGENT_VOICE_SPEAK_LOCK_WAIT_SECONDS:-120}"
   deadline=$((SECONDS + wait_seconds))
   speech_args=("$@")
   speaker_label=""
+  text_idx="$(find_speech_arg_index "$@")"
 
-  if [[ $# -gt 0 && "$1" != -* ]]; then
+  if [[ "$text_idx" -ge 0 ]]; then
     speaker_label="$(resolve_speaker_label 2>/dev/null || true)"
-    if [[ -n "$speaker_label" ]] && ! text_already_has_speaker_label "$speaker_label" "$*"; then
-      speech_args=("$speaker_label. $*")
+    if [[ -n "$speaker_label" ]] && ! text_already_has_speaker_label "$speaker_label" "${speech_args[$text_idx]}"; then
+      speech_args[$text_idx]="$speaker_label. ${speech_args[$text_idx]}"
     fi
   fi
 
