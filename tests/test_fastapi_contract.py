@@ -822,6 +822,45 @@ def test_audio_speech_returns_502_after_suspiciously_long_retry_fails(monkeypatc
     assert calls == 2
 
 
+def test_generate_audio_segment_once_stops_streaming_past_reasonable_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    yielded = 0
+    sample_rate = 24000
+
+    class FakeResult:
+        sample_rate = 24000
+        token_count = 100
+
+        def __init__(self) -> None:
+            self.audio = server.np.full(sample_rate, 0.1, dtype=server.np.float32)
+
+    class FakeModel:
+        def generate_voice_design(self, **_kwargs: Any) -> Any:
+            nonlocal yielded
+            for _ in range(5):
+                yielded += 1
+                yield FakeResult()
+
+    monkeypatch.setattr(server, "TTS_MAX_OUTPUT_SECONDS", 1.5)
+
+    audio, returned_sample_rate, token_count = server._generate_audio_segment_once(
+        model=FakeModel(),
+        text="Short status should not run forever",
+        instruct="clear voice",
+        language="English",
+        max_tokens=999,
+        attempt=0,
+    )
+
+    assert returned_sample_rate == sample_rate
+    assert yielded == 2
+    assert token_count == 200
+    assert audio.size / returned_sample_rate == pytest.approx(2.0)
+
+
 def test_generate_audio_uses_stable_sampling_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     import agent_voice.server as server
 

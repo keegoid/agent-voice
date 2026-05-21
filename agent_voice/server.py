@@ -505,6 +505,8 @@ def _generate_audio_segment_once(
     chunks: list[np.ndarray] = []
     sample_rate = 24000
     token_count = 0
+    frame_count = 0
+    max_seconds = _max_reasonable_audio_seconds(text)
     temperature, top_p, repetition_penalty = _tts_sampling_params(attempt)
 
     for result in model.generate_voice_design(
@@ -516,9 +518,19 @@ def _generate_audio_segment_once(
         repetition_penalty=repetition_penalty,
         max_tokens=max_tokens,
     ):
-        chunks.append(np.asarray(result.audio))
+        chunk = np.asarray(result.audio)
+        chunks.append(chunk)
         sample_rate = int(result.sample_rate)
+        frame_count += _audio_frame_count(chunk)
         token_count += int(getattr(result, "token_count", 0) or 0)
+        if sample_rate > 0 and frame_count / sample_rate > max_seconds:
+            print(
+                "Stopping TTS stream after output exceeded reasonable duration "
+                f"(words={_word_count(text)}, duration_seconds={frame_count / sample_rate:.2f}, "
+                f"max_seconds={max_seconds:.2f}, tokens={token_count})",
+                file=sys.stderr,
+            )
+            break
 
     if not chunks:
         return np.array([], dtype=np.float32), sample_rate, token_count
@@ -607,6 +619,12 @@ def _is_suspiciously_short_audio(text: str, audio: np.ndarray, sample_rate: int)
         words / TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND,
     )
     return activity.active_seconds < min_reasonable_seconds
+
+
+def _audio_frame_count(audio: np.ndarray) -> int:
+    if audio.ndim > 1:
+        return int(audio.shape[0])
+    return int(audio.size)
 
 
 def _suspiciously_short_output_error(text: str, audio: np.ndarray, sample_rate: int) -> SuspiciousTTSOutputError:
