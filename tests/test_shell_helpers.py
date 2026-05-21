@@ -107,6 +107,37 @@ def test_agent_speak_skips_when_voice_lock_is_busy(tmp_path: Path) -> None:
     assert "voice lock busy" in log.read_text(encoding="utf-8")
 
 
+def test_agent_speak_spools_when_helper_cannot_reach_server(tmp_path: Path) -> None:
+    agent_speak = require_executable("agent-speak")
+    spool = tmp_path / "spool"
+    helper = make_fake_bin(
+        tmp_path / "bin",
+        "fake-voice-helper",
+        """
+        #!/usr/bin/env bash
+        exit 7
+        """,
+    )
+
+    result = run_with_home(
+        [str(agent_speak), "--voice", "warm_wisdom", "hello from sandbox"],
+        tmp_path,
+        extra_env={
+            "AGENT_VOICE_HELPER": str(helper),
+            "AGENT_VOICE_SPEAK_SYNC": "1",
+            "AGENT_VOICE_SPEAK_LOCK": str(tmp_path / "speak.lock"),
+            "AGENT_VOICE_SPOOL_DIR": str(spool),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    queued = list(spool.glob("*.json"))
+    assert len(queued) == 1
+    payload = json.loads(queued[0].read_text(encoding="utf-8"))
+    assert payload["message"] == "hello from sandbox"
+    assert payload["voice_id"] == "warm_wisdom"
+
+
 class MockPaperclipServer:
     def __init__(self) -> None:
         self.requests: list[str] = []

@@ -80,6 +80,7 @@ NOTIFY_PLAYBACK_TIMEOUT_SECONDS = float(os.getenv("AGENT_VOICE_NOTIFY_PLAYBACK_T
 NOTIFY_PLAYBACK_GRACE_SECONDS = float(os.getenv("AGENT_VOICE_NOTIFY_PLAYBACK_GRACE_SECONDS") or "2")
 NOTIFY_OSASCRIPT_TIMEOUT_SECONDS = float(os.getenv("AGENT_VOICE_NOTIFY_OSASCRIPT_TIMEOUT_SECONDS") or "5")
 NOTIFY_DEFAULT_CORS_ORIGIN = "http://localhost"
+SPEAK_SPOOL_POLL_SECONDS = float(os.getenv("AGENT_VOICE_SPEAK_SPOOL_POLL_SECONDS") or "0.5")
 
 app = FastAPI(title="agent-voice", version="0.2.1")
 _tts_model = None
@@ -95,6 +96,8 @@ _pronunciation_cache_lock = threading.Lock()
 _logged_dropped_stt_options: set[tuple[str, ...]] = set()
 _notify_request_counts: dict[str, tuple[int, float]] = {}
 _notify_queue_depth = 0
+_speak_spool_thread: threading.Thread | None = None
+_speak_spool_stop = threading.Event()
 _pronunciation_cache_key: tuple[str, int, int] | None = None
 _pronunciation_cache_rules: list[tuple[re.Pattern[str], str]] = []
 _QWEN_TRANSFORMERS_CONFIG_WARNING = (
@@ -1152,6 +1155,98 @@ def _send_notification(payload: NotifyPayload) -> dict[str, Any]:
     }
 
 
+def _speak_spool_dir() -> Path:
+    configured = os.getenv("AGENT_VOICE_SPOOL_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return Path(tempfile.gettempdir()) / f"com.keegoid.agent-voice.{os.getuid()}" / "speak"
+
+
+def _speak_spool_enabled() -> bool:
+    return _env_flag("AGENT_VOICE_SPEAK_SPOOL_ENABLED", True)
+
+
+def _process_speak_spool_file(path: Path) -> None:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        payload = NotifyPayload.model_validate(raw)
+    except Exception as exc:
+        print(f"Invalid speech spool request {path}: {exc}", file=sys.stderr)
+        path.replace(path.with_suffix(path.suffix + ".bad"))
+        return
+
+    message = _sanitize_notify_text(payload.message or NOTIFY_DEFAULT_MESSAGE, "message", preserve_pauses=True)
+    voice, _voice_fallback = _resolve_notify_voice(payload)
+    if mute_state.is_muted() or not payload.voice_enabled:
+        return
+
+    _run_notify_voice_queued(
+        lambda: _generate_and_play_notification_audio(
+            text=message,
+            voice=voice,
+            instruct=payload.instruct,
+            language=payload.language,
+        )
+    )
+
+
+def _drain_speak_spool_once() -> None:
+    spool_dir = _speak_spool_dir()
+    try:
+        spool_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(spool_dir, 0o700)
+    except OSError as exc:
+        print(f"Speech spool unavailable at {spool_dir}: {exc}", file=sys.stderr)
+        return
+
+    for path in sorted(spool_dir.glob("*.json")):
+        processing = path.with_suffix(path.suffix + ".processing")
+        try:
+            path.replace(processing)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            print(f"Could not claim speech spool request {path}: {exc}", file=sys.stderr)
+            continue
+        try:
+            _process_speak_spool_file(processing)
+        except Exception as exc:
+            print(f"Failed to process speech spool request {processing}: {exc}", file=sys.stderr)
+            failed = processing.with_suffix(processing.suffix + ".failed")
+            try:
+                processing.replace(failed)
+            except OSError:
+                pass
+        else:
+            try:
+                processing.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _speak_spool_worker() -> None:
+    while not _speak_spool_stop.wait(SPEAK_SPOOL_POLL_SECONDS):
+        _drain_speak_spool_once()
+
+
+@app.on_event("startup")
+def _start_speak_spool_worker() -> None:
+    global _speak_spool_thread
+
+    if not _speak_spool_enabled():
+        return
+    if _speak_spool_thread and _speak_spool_thread.is_alive():
+        return
+    _speak_spool_stop.clear()
+    _speak_spool_thread = threading.Thread(target=_speak_spool_worker, name="agent-voice-speak-spool", daemon=True)
+    _speak_spool_thread.start()
+
+
+@app.on_event("shutdown")
+def _stop_speak_spool_worker() -> None:
+    _speak_spool_stop.set()
+
+
 def _notify_health() -> dict[str, Any]:
     host = os.getenv("AGENT_VOICE_HOST") or "127.0.0.1"
     port = int(os.getenv("AGENT_VOICE_PORT") or "8880")
@@ -1175,6 +1270,8 @@ def _notify_health() -> dict[str, Any]:
         "rate_window_seconds": NOTIFY_RATE_WINDOW_SECONDS,
         "rate_client_limit": NOTIFY_RATE_CLIENT_LIMIT,
         "desktop_notifications": _env_flag("AGENT_VOICE_NOTIFY_DESKTOP", True),
+        "speak_spool_enabled": _speak_spool_enabled(),
+        "speak_spool_path": str(_speak_spool_dir()),
     }
 
 

@@ -9,6 +9,7 @@ import threading
 import time
 import warnings
 import wave
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -373,6 +374,42 @@ def test_notify_health_reports_compatibility_state_without_generation(
     assert data["voice_system"] == "agent-voice"
     assert data["default_voice"] == "cyberpunk_cool"
     assert set(data["known_voices"]) >= PUBLIC_VOICES
+    assert data["speak_spool_enabled"] is True
+    assert data["speak_spool_path"]
+
+
+def test_speak_spool_uses_existing_notification_audio_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agent_voice.server as server
+
+    played: list[dict[str, str | None]] = []
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    request_path = spool / "request.json"
+    request_path.write_text(
+        json.dumps({"message": "hello from spool", "voice_id": "warm_wisdom", "language": "English"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENT_VOICE_SPOOL_DIR", str(spool))
+    monkeypatch.setattr(server.mute_state, "is_muted", lambda: False)
+    monkeypatch.setattr(
+        server,
+        "_generate_and_play_notification_audio",
+        lambda **kwargs: played.append(kwargs),
+    )
+
+    server._drain_speak_spool_once()
+
+    assert played == [
+        {
+            "text": "hello from spool",
+            "voice": "warm_wisdom",
+            "instruct": None,
+            "language": "English",
+        }
+    ]
+    assert not request_path.exists()
 
 
 def test_speech_returns_silence_without_generation_when_muted(

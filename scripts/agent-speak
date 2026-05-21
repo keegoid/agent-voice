@@ -22,6 +22,10 @@ if [[ $# -eq 0 || -z "$helper" || ! -x "$helper" ]]; then
 fi
 
 mkdir -p "$(dirname "$log")" 2>/dev/null || true
+if ! { : >>"$log"; } 2>/dev/null; then
+  log="${TMPDIR:-/tmp}/agent-speak.log"
+  mkdir -p "$(dirname "$log")" 2>/dev/null || true
+fi
 
 timestamp() {
   date '+%Y-%m-%dT%H:%M:%S%z'
@@ -282,6 +286,64 @@ find_speech_arg_index() {
   printf '%d' -1
 }
 
+speech_option_value() {
+  local wanted="$1"
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      "$wanted")
+        [[ $# -ge 2 ]] || return 1
+        printf '%s' "$2"
+        return 0
+        ;;
+      --)
+        return 1
+        ;;
+    esac
+    shift
+  done
+  return 1
+}
+
+agent_voice_spool_dir() {
+  if [[ -n "${AGENT_VOICE_SPOOL_DIR:-}" ]]; then
+    printf '%s' "$AGENT_VOICE_SPOOL_DIR"
+  else
+    printf '%s/com.keegoid.agent-voice.%s/speak' "${TMPDIR:-/tmp}" "$(id -u)"
+  fi
+}
+
+enqueue_speech_spool() {
+  local text="$1"
+  shift
+  local spool_dir tmp final voice instruct language
+  command -v jq >/dev/null 2>&1 || return 1
+  spool_dir="$(agent_voice_spool_dir)"
+  mkdir -p "$spool_dir" 2>/dev/null || return 1
+  chmod 700 "$(dirname "$spool_dir")" "$spool_dir" 2>/dev/null || true
+
+  voice="$(speech_option_value "--voice" "$@" || speech_option_value "-v" "$@" || true)"
+  instruct="$(speech_option_value "--instruct" "$@" || speech_option_value "-i" "$@" || true)"
+  language="${AGENT_VOICE_LANGUAGE:-English}"
+  [[ -n "$voice" ]] || voice="${AGENT_VOICE_VOICE:-cyberpunk_cool}"
+
+  tmp="$(mktemp "$spool_dir/.agent-speak.XXXXXX.json")" || return 1
+  final="$spool_dir/$(date '+%Y%m%d%H%M%S')-$$-$RANDOM.json"
+  if jq -n \
+    --arg message "$text" \
+    --arg voice "$voice" \
+    --arg instruct "$instruct" \
+    --arg language "$language" \
+    '{message: $message, voice_id: $voice, language: $language}
+      + (if $instruct == "" then {} else {instruct: $instruct} end)' >"$tmp"; then
+    mv "$tmp" "$final"
+    printf "%s agent-speak queued spool: %s\n" "$(timestamp)" "$final" >>"$log" 2>/dev/null || true
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+  return 1
+}
+
 run_worker() {
   lock="${AGENT_VOICE_SPEAK_LOCK:-${TMPDIR:-/tmp}/agent-speak.lock}"
   wait_seconds="${AGENT_VOICE_SPEAK_LOCK_WAIT_SECONDS:-5}"
@@ -321,6 +383,9 @@ run_worker() {
   printf "%s agent-speak start: %s\n" "$(timestamp)" "${speech_args[*]}" >>"$log"
   "$helper" "${speech_args[@]}" </dev/null >>"$log" 2>&1
   rc=$?
+  if [[ "$rc" -ne 0 && "$text_idx" -ge 0 ]]; then
+    enqueue_speech_spool "${speech_args[$text_idx]}" "${speech_args[@]}" || true
+  fi
   printf "%s agent-speak finish rc=%s\n" "$(timestamp)" "$rc" >>"$log"
   return 0
 }
