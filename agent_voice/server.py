@@ -278,37 +278,36 @@ def generate_audio(
     # under concurrent generation. Serialize synthesis while keeping health and
     # STT requests independent.
     with _tts_generation_lock:
-        with _tts_watchdog(text):
-            segments = _split_speech_text(text, TTS_MAX_SEGMENT_CHARS)
-            chunks: list[np.ndarray] = []
-            sample_rate = 24000
-            output_sample_rate: int | None = None
+        segments = _split_speech_text(text, TTS_MAX_SEGMENT_CHARS)
+        chunks: list[np.ndarray] = []
+        sample_rate = 24000
+        output_sample_rate: int | None = None
 
-            for segment in segments:
-                for audio, sample_rate in _generate_audio_parts_for_segment(
-                    model=model,
-                    text=segment,
-                    instruct=instruct,
-                    language=language,
-                    max_tokens=max_tokens,
-                ):
-                    if audio.size == 0:
-                        continue
-                    if output_sample_rate is None:
-                        output_sample_rate = sample_rate
-                    elif sample_rate != output_sample_rate:
-                        raise RuntimeError(
-                            f"TTS segments returned inconsistent sample rates: {output_sample_rate} and {sample_rate}"
-                        )
-                    if chunks:
-                        chunks.append(np.zeros(int(sample_rate * TTS_SEGMENT_SILENCE_SECONDS), dtype=audio.dtype))
-                    chunks.append(audio)
+        for segment in segments:
+            for audio, sample_rate in _generate_audio_parts_for_segment(
+                model=model,
+                text=segment,
+                instruct=instruct,
+                language=language,
+                max_tokens=max_tokens,
+            ):
+                if audio.size == 0:
+                    continue
+                if output_sample_rate is None:
+                    output_sample_rate = sample_rate
+                elif sample_rate != output_sample_rate:
+                    raise RuntimeError(
+                        f"TTS segments returned inconsistent sample rates: {output_sample_rate} and {sample_rate}"
+                    )
+                if chunks:
+                    chunks.append(np.zeros(int(sample_rate * TTS_SEGMENT_SILENCE_SECONDS), dtype=audio.dtype))
+                chunks.append(audio)
 
-            if not chunks:
-                return b""
+        if not chunks:
+            return b""
 
-            audio = np.concatenate(chunks)
-            return _encode_audio(audio, output_sample_rate or sample_rate, response_format)
+        audio = np.concatenate(chunks)
+        return _encode_audio(audio, output_sample_rate or sample_rate, response_format)
 
 
 @contextmanager
@@ -317,20 +316,26 @@ def _tts_watchdog(text: str) -> Any:
         yield
         return
 
-    marker_path = _tts_watchdog_marker_path()
+    read_fd = -1
+    write_fd = -1
     watchdog: subprocess.Popen[Any] | None = None
     try:
-        marker_path.write_text("active\n", encoding="utf-8")
-        watchdog = _start_tts_watchdog_process(marker_path, text)
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(read_fd, True)
+        watchdog = _start_tts_watchdog_process(read_fd, text)
     except OSError as exc:
         print(f"Could not start TTS watchdog: {exc}", file=sys.stderr)
+    finally:
+        if read_fd >= 0:
+            os.close(read_fd)
     try:
         yield
     finally:
-        try:
-            marker_path.unlink()
-        except FileNotFoundError:
-            pass
+        if write_fd >= 0:
+            try:
+                os.close(write_fd)
+            except OSError:
+                pass
         if watchdog and watchdog.poll() is None:
             watchdog.terminate()
             try:
@@ -339,28 +344,21 @@ def _tts_watchdog(text: str) -> Any:
                 watchdog.kill()
 
 
-def _tts_watchdog_marker_path() -> Path:
-    fd, path = tempfile.mkstemp(prefix="agent-voice-tts-watchdog-", suffix=".active")
-    os.close(fd)
-    return Path(path)
-
-
-def _start_tts_watchdog_process(marker_path: Path, text: str) -> subprocess.Popen[Any]:
+def _start_tts_watchdog_process(read_fd: int, text: str, *, pid: int | None = None) -> subprocess.Popen[Any]:
     code = """
 import os
 import signal
+import select
 import sys
-import time
 
 pid = int(sys.argv[1])
 timeout_seconds = float(sys.argv[2])
-marker_path = sys.argv[3]
+read_fd = int(sys.argv[3])
 kill_grace_seconds = float(sys.argv[4])
 words = int(sys.argv[5])
-exit_code = int(sys.argv[6])
 
-time.sleep(timeout_seconds)
-if not os.path.exists(marker_path):
+ready, _, _ = select.select([read_fd], [], [], timeout_seconds)
+if ready:
     raise SystemExit(0)
 
 print(
@@ -375,30 +373,32 @@ try:
 except ProcessLookupError:
     raise SystemExit(0)
 
-time.sleep(kill_grace_seconds)
-if os.path.exists(marker_path):
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-raise SystemExit(exit_code)
+ready, _, _ = select.select([read_fd], [], [], kill_grace_seconds)
+if ready:
+    raise SystemExit(0)
+
+try:
+    os.kill(pid, signal.SIGKILL)
+except ProcessLookupError:
+    pass
+raise SystemExit(0)
 """
     return subprocess.Popen(
         [
             sys.executable,
             "-c",
             code,
-            str(os.getpid()),
+            str(pid or os.getpid()),
             str(TTS_WATCHDOG_SECONDS),
-            str(marker_path),
+            str(read_fd),
             str(TTS_WATCHDOG_KILL_GRACE_SECONDS),
             str(_word_count(text)),
-            str(TTS_WATCHDOG_EXIT_CODE),
         ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=None,
         close_fds=True,
+        pass_fds=(read_fd,),
         start_new_session=True,
     )
 
@@ -605,28 +605,29 @@ def _generate_audio_segment_once(
     max_seconds = _max_reasonable_audio_seconds(text)
     temperature, top_p, repetition_penalty = _tts_sampling_params(attempt)
 
-    for result in model.generate_voice_design(
-        text=text,
-        instruct=instruct,
-        language=language,
-        temperature=temperature,
-        top_p=top_p,
-        repetition_penalty=repetition_penalty,
-        max_tokens=max_tokens,
-    ):
-        chunk = np.asarray(result.audio)
-        chunks.append(chunk)
-        sample_rate = int(result.sample_rate)
-        frame_count += _audio_frame_count(chunk)
-        token_count += int(getattr(result, "token_count", 0) or 0)
-        if sample_rate > 0 and frame_count / sample_rate > max_seconds:
-            print(
-                "Stopping TTS stream after output exceeded reasonable duration "
-                f"(words={_word_count(text)}, duration_seconds={frame_count / sample_rate:.2f}, "
-                f"max_seconds={max_seconds:.2f}, tokens={token_count})",
-                file=sys.stderr,
-            )
-            break
+    with _tts_watchdog(text):
+        for result in model.generate_voice_design(
+            text=text,
+            instruct=instruct,
+            language=language,
+            temperature=temperature,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            max_tokens=max_tokens,
+        ):
+            chunk = np.asarray(result.audio)
+            chunks.append(chunk)
+            sample_rate = int(result.sample_rate)
+            frame_count += _audio_frame_count(chunk)
+            token_count += int(getattr(result, "token_count", 0) or 0)
+            if sample_rate > 0 and frame_count / sample_rate > max_seconds:
+                print(
+                    "Stopping TTS stream after output exceeded reasonable duration "
+                    f"(words={_word_count(text)}, duration_seconds={frame_count / sample_rate:.2f}, "
+                    f"max_seconds={max_seconds:.2f}, tokens={token_count})",
+                    file=sys.stderr,
+                )
+                break
 
     if not chunks:
         return np.array([], dtype=np.float32), sample_rate, token_count

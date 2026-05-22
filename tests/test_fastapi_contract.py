@@ -5,6 +5,8 @@ import io
 import json
 import logging
 import os
+import subprocess
+import sys
 import threading
 import time
 import warnings
@@ -685,7 +687,7 @@ def test_generate_audio_starts_and_cancels_external_tts_watchdog(monkeypatch: py
     import agent_voice.server as server
 
     events: list[tuple[str, Any]] = []
-    marker_paths: list[Path] = []
+    read_fds: list[int] = []
 
     class FakeProcess:
         def __init__(self) -> None:
@@ -706,12 +708,13 @@ def test_generate_audio_starts_and_cancels_external_tts_watchdog(monkeypatch: py
             events.append(("kill", None))
 
     def fake_popen(args: list[str], **kwargs: Any) -> FakeProcess:
-        marker_path = Path(args[5])
-        marker_paths.append(marker_path)
+        read_fd = int(args[5])
+        read_fds.append(read_fd)
         events.append(("popen_timeout", args[4]))
-        events.append(("popen_marker_exists", marker_path.exists()))
+        events.append(("popen_read_fd_open", os.fstat(read_fd).st_mode > 0))
+        events.append(("popen_kill_grace", args[6]))
         events.append(("popen_words", args[7]))
-        events.append(("popen_exit_code", args[8]))
+        events.append(("pass_fds", kwargs["pass_fds"]))
         events.append(("start_new_session", kwargs["start_new_session"]))
         return FakeProcess()
 
@@ -738,17 +741,47 @@ def test_generate_audio_starts_and_cancels_external_tts_watchdog(monkeypatch: py
     )
 
     assert audio.startswith(b"RIFF")
-    assert marker_paths
-    assert not marker_paths[0].exists()
+    assert read_fds
+    with pytest.raises(OSError):
+        os.fstat(read_fds[0])
     assert events == [
         ("popen_timeout", "12.5"),
-        ("popen_marker_exists", True),
+        ("popen_read_fd_open", True),
+        ("popen_kill_grace", "5.0"),
         ("popen_words", "5"),
-        ("popen_exit_code", "75"),
+        ("pass_fds", (read_fds[0],)),
         ("start_new_session", True),
         ("terminate", None),
         ("wait", 1),
     ]
+
+
+def test_tts_watchdog_process_terminates_stuck_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    read_fd, write_fd = os.pipe()
+    try:
+        os.set_inheritable(read_fd, True)
+        monkeypatch.setattr(server, "TTS_WATCHDOG_SECONDS", 0.1)
+        monkeypatch.setattr(server, "TTS_WATCHDOG_KILL_GRACE_SECONDS", 0.1)
+
+        watchdog = server._start_tts_watchdog_process(read_fd, "stuck child", pid=victim.pid)
+        os.close(read_fd)
+        read_fd = -1
+
+        watchdog.wait(timeout=3)
+        assert victim.wait(timeout=3) != 0
+    finally:
+        for fd in (read_fd, write_fd):
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if victim.poll() is None:
+            victim.terminate()
+            victim.wait(timeout=3)
 
 
 def test_generate_audio_retries_suspiciously_short_status_clip(monkeypatch: pytest.MonkeyPatch) -> None:
