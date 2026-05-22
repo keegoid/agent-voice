@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 _COOL_FIGMENT_RAIN_VOICE_LOCKED = (
-    "A young woman voice actor with a natural mid-range voice, guarded and sharp. "
-    "She sounds like black-market tech that still works after the rain: cool, "
-    "useful, unimpressed. Clipped phrasing, dry edge, neon-lit back-alley energy, "
-    "clean studio tone. No low register, no gravel, no distortion; keep the "
-    "scolding adult and sardonic. Maintain one consistent speaker identity for "
-    "the entire output: same timbre, pitch center, age, accent, microphone "
-    "distance, and vocal texture from sentence to sentence. Emotional swings "
-    "should change only cadence, pause length, intensity, and emphasis. Do not "
-    "morph into a different voice, character, register, accent, or age between "
-    "sentences."
+    "A young woman voice actor with a natural mid-range voice, guarded and "
+    "sharp. She sounds like black-market tech that still works after the rain: "
+    "cool, useful, unimpressed. Clipped phrasing, dry edge, neon-lit back-alley "
+    "energy, clean studio tone. Spoken target: soft-spoken and close to the "
+    "microphone, with subtle ASMR texture focused on delicate consonant detail "
+    "and tiny dry pauses. Use only a little breath at phrase endings; keep the "
+    "words crisp and clean. Keep the pitch natural and lightly lifted; do not "
+    "make the voice deeper to sound quiet. The result should feel almost "
+    "whispered without losing the original speaking voice. No low register, no "
+    "gravel, no distortion, no mouth-noise performance, no sleepy murmur. Keep "
+    "the delivery scolding adult and sardonic. Maintain one consistent speaker "
+    "identity for the entire output: same timbre, pitch center, age, accent, "
+    "microphone distance, and vocal texture from sentence to sentence. Emotional "
+    "swings should change only cadence, pause length, intensity, and emphasis. "
+    "Do not morph into a different voice, character, register, accent, or age "
+    "between sentences."
 )
 
 _CONSISTENT_SPEAKER_LOCK = (
