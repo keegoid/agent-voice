@@ -92,6 +92,13 @@ the longest contiguous active-speech span using `AGENT_VOICE_TTS_ACTIVITY_WINDOW
 `AGENT_VOICE_TTS_ACTIVITY_MIN_RMS`, and
 `AGENT_VOICE_TTS_ACTIVITY_RELATIVE_RMS`.
 Segment joins use `AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS=0.18` by default.
+During active synthesis, the server starts a wall-clock watchdog helper process
+(`AGENT_VOICE_TTS_WATCHDOG_SECONDS=300` by default). If the MLX generator gets
+wedged inside one serialized TTS request, the helper terminates the server so
+launchd restarts a clean process instead of leaving later agent cues stuck
+behind the TTS lock. `AGENT_VOICE_TTS_WATCHDOG_KILL_GRACE_SECONDS=5` controls
+the SIGTERM-to-SIGKILL grace period. Set the watchdog budget to `0` to disable
+it for local debugging.
 
 The launchd service sets `HF_HOME` to
 `~/.agent-voice/model-cache/huggingface`, so Hugging Face/MLX model files are
@@ -219,6 +226,7 @@ The server uses stable Qwen3 sampling defaults for speech:
 `AGENT_VOICE_TTS_REPETITION_PENALTY` (default `1.05`). Retry attempts use the
 `AGENT_VOICE_TTS_RETRY_*` variants. Before encoding, generated waveforms are
 sanitized and peak-limited with `AGENT_VOICE_TTS_PEAK_LIMIT` (default `0.98`).
+The generation watchdog is reported in health as `tts_watchdog_seconds`.
 
 Transcription:
 

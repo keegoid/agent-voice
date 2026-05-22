@@ -58,6 +58,9 @@ TTS_ACTIVITY_WINDOW_SECONDS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_WINDOW_S
 TTS_ACTIVITY_MIN_RMS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_MIN_RMS") or "0.004")
 TTS_ACTIVITY_RELATIVE_RMS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_RELATIVE_RMS") or "0.08")
 TTS_ACTIVITY_MAX_SILENT_GAP_SECONDS = 0.75
+TTS_WATCHDOG_SECONDS = float(os.getenv("AGENT_VOICE_TTS_WATCHDOG_SECONDS") or "300")
+TTS_WATCHDOG_KILL_GRACE_SECONDS = float(os.getenv("AGENT_VOICE_TTS_WATCHDOG_KILL_GRACE_SECONDS") or "5")
+TTS_WATCHDOG_EXIT_CODE = 75
 TTS_REQUEST_MAX_TOKENS_LIMIT = 100000
 FFMPEG_TIMEOUT_SECONDS = float(os.getenv("AGENT_VOICE_FFMPEG_TIMEOUT_SECONDS") or "60")
 MAX_STT_UPLOAD_BYTES = int(os.getenv("AGENT_VOICE_MAX_STT_UPLOAD_BYTES") or str(25 * 1024 * 1024))
@@ -307,6 +310,99 @@ def generate_audio(
         return _encode_audio(audio, output_sample_rate or sample_rate, response_format)
 
 
+@contextmanager
+def _tts_watchdog(text: str) -> Any:
+    if TTS_WATCHDOG_SECONDS <= 0:
+        yield
+        return
+
+    read_fd = -1
+    write_fd = -1
+    watchdog: subprocess.Popen[Any] | None = None
+    try:
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(read_fd, True)
+        watchdog = _start_tts_watchdog_process(read_fd, text)
+    except OSError as exc:
+        print(f"Could not start TTS watchdog: {exc}", file=sys.stderr)
+    finally:
+        if read_fd >= 0:
+            os.close(read_fd)
+    try:
+        yield
+    finally:
+        if write_fd >= 0:
+            try:
+                os.close(write_fd)
+            except OSError:
+                pass
+        if watchdog and watchdog.poll() is None:
+            watchdog.terminate()
+            try:
+                watchdog.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                watchdog.kill()
+
+
+def _start_tts_watchdog_process(read_fd: int, text: str, *, pid: int | None = None) -> subprocess.Popen[Any]:
+    code = """
+import os
+import signal
+import select
+import sys
+
+pid = int(sys.argv[1])
+timeout_seconds = float(sys.argv[2])
+read_fd = int(sys.argv[3])
+kill_grace_seconds = float(sys.argv[4])
+words = int(sys.argv[5])
+
+ready, _, _ = select.select([read_fd], [], [], timeout_seconds)
+if ready:
+    raise SystemExit(0)
+
+print(
+    "TTS generation watchdog exceeded wall-clock budget; restarting agent-voice "
+    f"(timeout_seconds={timeout_seconds:g}, words={words})",
+    file=sys.stderr,
+    flush=True,
+)
+
+try:
+    os.kill(pid, signal.SIGTERM)
+except ProcessLookupError:
+    raise SystemExit(0)
+
+ready, _, _ = select.select([read_fd], [], [], kill_grace_seconds)
+if ready:
+    raise SystemExit(0)
+
+try:
+    os.kill(pid, signal.SIGKILL)
+except ProcessLookupError:
+    pass
+raise SystemExit(0)
+"""
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            code,
+            str(pid or os.getpid()),
+            str(TTS_WATCHDOG_SECONDS),
+            str(read_fd),
+            str(TTS_WATCHDOG_KILL_GRACE_SECONDS),
+            str(_word_count(text)),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=None,
+        close_fds=True,
+        pass_fds=(read_fd,),
+        start_new_session=True,
+    )
+
+
 def _normalize_tts_response_format(response_format: str) -> str:
     normalized = response_format.strip().lower()
     if normalized not in TTS_RESPONSE_FORMATS:
@@ -509,28 +605,29 @@ def _generate_audio_segment_once(
     max_seconds = _max_reasonable_audio_seconds(text)
     temperature, top_p, repetition_penalty = _tts_sampling_params(attempt)
 
-    for result in model.generate_voice_design(
-        text=text,
-        instruct=instruct,
-        language=language,
-        temperature=temperature,
-        top_p=top_p,
-        repetition_penalty=repetition_penalty,
-        max_tokens=max_tokens,
-    ):
-        chunk = np.asarray(result.audio)
-        chunks.append(chunk)
-        sample_rate = int(result.sample_rate)
-        frame_count += _audio_frame_count(chunk)
-        token_count += int(getattr(result, "token_count", 0) or 0)
-        if sample_rate > 0 and frame_count / sample_rate > max_seconds:
-            print(
-                "Stopping TTS stream after output exceeded reasonable duration "
-                f"(words={_word_count(text)}, duration_seconds={frame_count / sample_rate:.2f}, "
-                f"max_seconds={max_seconds:.2f}, tokens={token_count})",
-                file=sys.stderr,
-            )
-            break
+    with _tts_watchdog(text):
+        for result in model.generate_voice_design(
+            text=text,
+            instruct=instruct,
+            language=language,
+            temperature=temperature,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            max_tokens=max_tokens,
+        ):
+            chunk = np.asarray(result.audio)
+            chunks.append(chunk)
+            sample_rate = int(result.sample_rate)
+            frame_count += _audio_frame_count(chunk)
+            token_count += int(getattr(result, "token_count", 0) or 0)
+            if sample_rate > 0 and frame_count / sample_rate > max_seconds:
+                print(
+                    "Stopping TTS stream after output exceeded reasonable duration "
+                    f"(words={_word_count(text)}, duration_seconds={frame_count / sample_rate:.2f}, "
+                    f"max_seconds={max_seconds:.2f}, tokens={token_count})",
+                    file=sys.stderr,
+                )
+                break
 
     if not chunks:
         return np.array([], dtype=np.float32), sample_rate, token_count
@@ -1284,6 +1381,7 @@ def _notify_health() -> dict[str, Any]:
         "known_voices_source": "local",
         "voice_queue_depth": queue_depth,
         "voice_queue_max_depth": NOTIFY_QUEUE_MAX_DEPTH,
+        "tts_watchdog_seconds": TTS_WATCHDOG_SECONDS,
         "rate_limit": NOTIFY_RATE_LIMIT,
         "rate_window_seconds": NOTIFY_RATE_WINDOW_SECONDS,
         "rate_client_limit": NOTIFY_RATE_CLIENT_LIMIT,
@@ -1331,6 +1429,7 @@ def health() -> dict[str, object]:
         "model": "qwen3-tts",
         "tts_model_id": TTS_MODEL_ID,
         "tts_max_tokens": TTS_MAX_TOKENS,
+        "tts_watchdog_seconds": TTS_WATCHDOG_SECONDS,
         "stt_model_id": STT_MODEL_ID,
         "stt_processor_id": STT_PROCESSOR_ID,
         "voices": list(VOICE_DESIGNS.keys()),

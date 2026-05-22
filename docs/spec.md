@@ -20,12 +20,14 @@ default.
   - returns JSON with `status: "ok"`, the configured TTS and STT model ids, and
     the configured STT processor id, current `muted` state, and available
     public voice names.
+  - reports `tts_watchdog_seconds`, the wall-clock watchdog budget for active
+    TTS generation.
   - must not load either model just to report health.
 - `GET /health`
   - returns the compatibility health shape for legacy PAI notification callers.
   - reports the local notify default voice, pronunciation rule count, known
-    voice names, queue depth, queue max depth, rate limit, and desktop
-    notification setting.
+    voice names, queue depth, queue max depth, TTS watchdog budget, rate limit,
+    and desktop notification setting.
   - must not load either model just to report health.
 - `POST /notify`, `POST /notify/personality`, and `POST /pai`
   - accept legacy notification JSON fields:
@@ -99,6 +101,12 @@ default.
     transcoding.
   - inserts `AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS=0.18` seconds of silence
     between generated segments by default.
+  - starts a watchdog helper process during serialized generation using
+    `AGENT_VOICE_TTS_WATCHDOG_SECONDS=300`. If the generator exceeds that
+    wall-clock budget, the helper terminates the server so launchd restarts it
+    and clears the stuck TTS lock. `AGENT_VOICE_TTS_WATCHDOG_KILL_GRACE_SECONDS=5`
+    controls the SIGTERM-to-SIGKILL grace period. A watchdog budget of `0`
+    disables the guard.
   - returns generated audio bytes with the correct audio media type.
   - returns HTTP 500 if the model generates no audio or if generation fails.
 - `POST /v1/audio/transcriptions`

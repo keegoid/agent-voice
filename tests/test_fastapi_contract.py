@@ -5,6 +5,8 @@ import io
 import json
 import logging
 import os
+import subprocess
+import sys
 import threading
 import time
 import warnings
@@ -679,6 +681,107 @@ def test_generate_audio_serializes_shared_tts_model(monkeypatch: pytest.MonkeyPa
     assert all(result.startswith(b"RIFF") for result in results)
     assert state["calls"] == 2
     assert state["overlap"] is False
+
+
+def test_generate_audio_starts_and_cancels_external_tts_watchdog(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    events: list[tuple[str, Any]] = []
+    read_fds: list[int] = []
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.terminated = False
+
+        def poll(self) -> int | None:
+            return None if not self.terminated else 0
+
+        def terminate(self) -> None:
+            self.terminated = True
+            events.append(("terminate", None))
+
+        def wait(self, timeout: float | None = None) -> int:
+            events.append(("wait", timeout))
+            return 0
+
+        def kill(self) -> None:
+            events.append(("kill", None))
+
+    def fake_popen(args: list[str], **kwargs: Any) -> FakeProcess:
+        read_fd = int(args[5])
+        read_fds.append(read_fd)
+        events.append(("popen_timeout", args[4]))
+        events.append(("popen_read_fd_open", os.fstat(read_fd).st_mode > 0))
+        events.append(("popen_kill_grace", args[6]))
+        events.append(("popen_words", args[7]))
+        events.append(("pass_fds", kwargs["pass_fds"]))
+        events.append(("start_new_session", kwargs["start_new_session"]))
+        return FakeProcess()
+
+    class FakeResult:
+        audio = server.np.full(24000 * 3, 0.1, dtype=server.np.float32)
+        sample_rate = 24000
+        token_count = 100
+
+    class FakeModel:
+        def generate_voice_design(self, **_kwargs: Any) -> list[FakeResult]:
+            return [FakeResult()]
+
+    monkeypatch.setattr(server, "TTS_WATCHDOG_SECONDS", 12.5, raising=False)
+    monkeypatch.setattr(server, "TTS_WATCHDOG_EXIT_CODE", 75, raising=False)
+    monkeypatch.setattr(server.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+
+    audio = server.generate_audio(
+        text="Watchdog should cover normal generation",
+        instruct="clear voice",
+        language="English",
+        response_format="wav",
+        max_tokens=123,
+    )
+
+    assert audio.startswith(b"RIFF")
+    assert read_fds
+    with pytest.raises(OSError):
+        os.fstat(read_fds[0])
+    assert events == [
+        ("popen_timeout", "12.5"),
+        ("popen_read_fd_open", True),
+        ("popen_kill_grace", "5.0"),
+        ("popen_words", "5"),
+        ("pass_fds", (read_fds[0],)),
+        ("start_new_session", True),
+        ("terminate", None),
+        ("wait", 1),
+    ]
+
+
+def test_tts_watchdog_process_terminates_stuck_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    read_fd, write_fd = os.pipe()
+    try:
+        os.set_inheritable(read_fd, True)
+        monkeypatch.setattr(server, "TTS_WATCHDOG_SECONDS", 0.1)
+        monkeypatch.setattr(server, "TTS_WATCHDOG_KILL_GRACE_SECONDS", 0.1)
+
+        watchdog = server._start_tts_watchdog_process(read_fd, "stuck child", pid=victim.pid)
+        os.close(read_fd)
+        read_fd = -1
+
+        watchdog.wait(timeout=3)
+        assert victim.wait(timeout=3) != 0
+    finally:
+        for fd in (read_fd, write_fd):
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if victim.poll() is None:
+            victim.terminate()
+            victim.wait(timeout=3)
 
 
 def test_generate_audio_retries_suspiciously_short_status_clip(monkeypatch: pytest.MonkeyPatch) -> None:
