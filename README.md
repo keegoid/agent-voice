@@ -92,11 +92,13 @@ the longest contiguous active-speech span using `AGENT_VOICE_TTS_ACTIVITY_WINDOW
 `AGENT_VOICE_TTS_ACTIVITY_MIN_RMS`, and
 `AGENT_VOICE_TTS_ACTIVITY_RELATIVE_RMS`.
 Segment joins use `AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS=0.18` by default.
-During active synthesis, the server arms a wall-clock watchdog
+During active synthesis, the server starts a wall-clock watchdog helper process
 (`AGENT_VOICE_TTS_WATCHDOG_SECONDS=300` by default). If the MLX generator gets
-wedged inside one serialized TTS request, the watchdog exits the process so
-launchd restarts a clean server instead of leaving later agent cues stuck
-behind the TTS lock. Set it to `0` to disable the watchdog for local debugging.
+wedged inside one serialized TTS request, the helper terminates the server so
+launchd restarts a clean process instead of leaving later agent cues stuck
+behind the TTS lock. `AGENT_VOICE_TTS_WATCHDOG_KILL_GRACE_SECONDS=5` controls
+the SIGTERM-to-SIGKILL grace period. Set the watchdog budget to `0` to disable
+it for local debugging.
 
 The launchd service sets `HF_HOME` to
 `~/.agent-voice/model-cache/huggingface`, so Hugging Face/MLX model files are

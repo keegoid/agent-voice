@@ -59,6 +59,7 @@ TTS_ACTIVITY_MIN_RMS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_MIN_RMS") or "0
 TTS_ACTIVITY_RELATIVE_RMS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_RELATIVE_RMS") or "0.08")
 TTS_ACTIVITY_MAX_SILENT_GAP_SECONDS = 0.75
 TTS_WATCHDOG_SECONDS = float(os.getenv("AGENT_VOICE_TTS_WATCHDOG_SECONDS") or "300")
+TTS_WATCHDOG_KILL_GRACE_SECONDS = float(os.getenv("AGENT_VOICE_TTS_WATCHDOG_KILL_GRACE_SECONDS") or "5")
 TTS_WATCHDOG_EXIT_CODE = 75
 TTS_REQUEST_MAX_TOKENS_LIMIT = 100000
 FFMPEG_TIMEOUT_SECONDS = float(os.getenv("AGENT_VOICE_FFMPEG_TIMEOUT_SECONDS") or "60")
@@ -316,23 +317,90 @@ def _tts_watchdog(text: str) -> Any:
         yield
         return
 
-    timer = threading.Timer(TTS_WATCHDOG_SECONDS, _terminate_for_tts_watchdog, args=(text, TTS_WATCHDOG_SECONDS))
-    timer.daemon = True
-    timer.start()
+    marker_path = _tts_watchdog_marker_path()
+    watchdog: subprocess.Popen[Any] | None = None
+    try:
+        marker_path.write_text("active\n", encoding="utf-8")
+        watchdog = _start_tts_watchdog_process(marker_path, text)
+    except OSError as exc:
+        print(f"Could not start TTS watchdog: {exc}", file=sys.stderr)
     try:
         yield
     finally:
-        timer.cancel()
+        try:
+            marker_path.unlink()
+        except FileNotFoundError:
+            pass
+        if watchdog and watchdog.poll() is None:
+            watchdog.terminate()
+            try:
+                watchdog.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                watchdog.kill()
 
 
-def _terminate_for_tts_watchdog(text: str, timeout_seconds: float) -> None:
-    print(
-        "TTS generation watchdog exceeded wall-clock budget; restarting agent-voice "
-        f"(timeout_seconds={timeout_seconds:g}, words={_word_count(text)})",
-        file=sys.stderr,
-        flush=True,
+def _tts_watchdog_marker_path() -> Path:
+    fd, path = tempfile.mkstemp(prefix="agent-voice-tts-watchdog-", suffix=".active")
+    os.close(fd)
+    return Path(path)
+
+
+def _start_tts_watchdog_process(marker_path: Path, text: str) -> subprocess.Popen[Any]:
+    code = """
+import os
+import signal
+import sys
+import time
+
+pid = int(sys.argv[1])
+timeout_seconds = float(sys.argv[2])
+marker_path = sys.argv[3]
+kill_grace_seconds = float(sys.argv[4])
+words = int(sys.argv[5])
+exit_code = int(sys.argv[6])
+
+time.sleep(timeout_seconds)
+if not os.path.exists(marker_path):
+    raise SystemExit(0)
+
+print(
+    "TTS generation watchdog exceeded wall-clock budget; restarting agent-voice "
+    f"(timeout_seconds={timeout_seconds:g}, words={words})",
+    file=sys.stderr,
+    flush=True,
+)
+
+try:
+    os.kill(pid, signal.SIGTERM)
+except ProcessLookupError:
+    raise SystemExit(0)
+
+time.sleep(kill_grace_seconds)
+if os.path.exists(marker_path):
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+raise SystemExit(exit_code)
+"""
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            code,
+            str(os.getpid()),
+            str(TTS_WATCHDOG_SECONDS),
+            str(marker_path),
+            str(TTS_WATCHDOG_KILL_GRACE_SECONDS),
+            str(_word_count(text)),
+            str(TTS_WATCHDOG_EXIT_CODE),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=None,
+        close_fds=True,
+        start_new_session=True,
     )
-    os._exit(TTS_WATCHDOG_EXIT_CODE)
 
 
 def _normalize_tts_response_format(response_format: str) -> str:

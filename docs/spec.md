@@ -101,10 +101,12 @@ default.
     transcoding.
   - inserts `AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS=0.18` seconds of silence
     between generated segments by default.
-  - arms `AGENT_VOICE_TTS_WATCHDOG_SECONDS=300` during serialized generation.
-    If the generator exceeds that wall-clock budget, the server process exits
-    so launchd restarts it and clears the stuck TTS lock. A value of `0`
-    disables the watchdog.
+  - starts a watchdog helper process during serialized generation using
+    `AGENT_VOICE_TTS_WATCHDOG_SECONDS=300`. If the generator exceeds that
+    wall-clock budget, the helper terminates the server so launchd restarts it
+    and clears the stuck TTS lock. `AGENT_VOICE_TTS_WATCHDOG_KILL_GRACE_SECONDS=5`
+    controls the SIGTERM-to-SIGKILL grace period. A watchdog budget of `0`
+    disables the guard.
   - returns generated audio bytes with the correct audio media type.
   - returns HTTP 500 if the model generates no audio or if generation fails.
 - `POST /v1/audio/transcriptions`

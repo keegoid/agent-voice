@@ -681,24 +681,39 @@ def test_generate_audio_serializes_shared_tts_model(monkeypatch: pytest.MonkeyPa
     assert state["overlap"] is False
 
 
-def test_generate_audio_arms_and_cancels_tts_watchdog(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_audio_starts_and_cancels_external_tts_watchdog(monkeypatch: pytest.MonkeyPatch) -> None:
     import agent_voice.server as server
 
-    events: list[tuple[str, float | None]] = []
+    events: list[tuple[str, Any]] = []
+    marker_paths: list[Path] = []
 
-    class FakeTimer:
-        daemon = False
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.terminated = False
 
-        def __init__(self, seconds: float, _callback: Any, args: tuple[Any, ...] = ()) -> None:
-            self.seconds = seconds
-            self.args = args
-            events.append(("init", seconds))
+        def poll(self) -> int | None:
+            return None if not self.terminated else 0
 
-        def start(self) -> None:
-            events.append(("start", self.seconds))
+        def terminate(self) -> None:
+            self.terminated = True
+            events.append(("terminate", None))
 
-        def cancel(self) -> None:
-            events.append(("cancel", self.seconds))
+        def wait(self, timeout: float | None = None) -> int:
+            events.append(("wait", timeout))
+            return 0
+
+        def kill(self) -> None:
+            events.append(("kill", None))
+
+    def fake_popen(args: list[str], **kwargs: Any) -> FakeProcess:
+        marker_path = Path(args[5])
+        marker_paths.append(marker_path)
+        events.append(("popen_timeout", args[4]))
+        events.append(("popen_marker_exists", marker_path.exists()))
+        events.append(("popen_words", args[7]))
+        events.append(("popen_exit_code", args[8]))
+        events.append(("start_new_session", kwargs["start_new_session"]))
+        return FakeProcess()
 
     class FakeResult:
         audio = server.np.full(24000 * 3, 0.1, dtype=server.np.float32)
@@ -710,7 +725,8 @@ def test_generate_audio_arms_and_cancels_tts_watchdog(monkeypatch: pytest.Monkey
             return [FakeResult()]
 
     monkeypatch.setattr(server, "TTS_WATCHDOG_SECONDS", 12.5, raising=False)
-    monkeypatch.setattr(server.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(server, "TTS_WATCHDOG_EXIT_CODE", 75, raising=False)
+    monkeypatch.setattr(server.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
 
     audio = server.generate_audio(
@@ -722,7 +738,17 @@ def test_generate_audio_arms_and_cancels_tts_watchdog(monkeypatch: pytest.Monkey
     )
 
     assert audio.startswith(b"RIFF")
-    assert events == [("init", 12.5), ("start", 12.5), ("cancel", 12.5)]
+    assert marker_paths
+    assert not marker_paths[0].exists()
+    assert events == [
+        ("popen_timeout", "12.5"),
+        ("popen_marker_exists", True),
+        ("popen_words", "5"),
+        ("popen_exit_code", "75"),
+        ("start_new_session", True),
+        ("terminate", None),
+        ("wait", 1),
+    ]
 
 
 def test_generate_audio_retries_suspiciously_short_status_clip(monkeypatch: pytest.MonkeyPatch) -> None:
