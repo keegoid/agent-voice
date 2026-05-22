@@ -681,6 +681,50 @@ def test_generate_audio_serializes_shared_tts_model(monkeypatch: pytest.MonkeyPa
     assert state["overlap"] is False
 
 
+def test_generate_audio_arms_and_cancels_tts_watchdog(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_voice.server as server
+
+    events: list[tuple[str, float | None]] = []
+
+    class FakeTimer:
+        daemon = False
+
+        def __init__(self, seconds: float, _callback: Any, args: tuple[Any, ...] = ()) -> None:
+            self.seconds = seconds
+            self.args = args
+            events.append(("init", seconds))
+
+        def start(self) -> None:
+            events.append(("start", self.seconds))
+
+        def cancel(self) -> None:
+            events.append(("cancel", self.seconds))
+
+    class FakeResult:
+        audio = server.np.full(24000 * 3, 0.1, dtype=server.np.float32)
+        sample_rate = 24000
+        token_count = 100
+
+    class FakeModel:
+        def generate_voice_design(self, **_kwargs: Any) -> list[FakeResult]:
+            return [FakeResult()]
+
+    monkeypatch.setattr(server, "TTS_WATCHDOG_SECONDS", 12.5, raising=False)
+    monkeypatch.setattr(server.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+
+    audio = server.generate_audio(
+        text="Watchdog should cover normal generation",
+        instruct="clear voice",
+        language="English",
+        response_format="wav",
+        max_tokens=123,
+    )
+
+    assert audio.startswith(b"RIFF")
+    assert events == [("init", 12.5), ("start", 12.5), ("cancel", 12.5)]
+
+
 def test_generate_audio_retries_suspiciously_short_status_clip(monkeypatch: pytest.MonkeyPatch) -> None:
     import agent_voice.server as server
 

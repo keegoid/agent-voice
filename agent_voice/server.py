@@ -58,6 +58,8 @@ TTS_ACTIVITY_WINDOW_SECONDS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_WINDOW_S
 TTS_ACTIVITY_MIN_RMS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_MIN_RMS") or "0.004")
 TTS_ACTIVITY_RELATIVE_RMS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_RELATIVE_RMS") or "0.08")
 TTS_ACTIVITY_MAX_SILENT_GAP_SECONDS = 0.75
+TTS_WATCHDOG_SECONDS = float(os.getenv("AGENT_VOICE_TTS_WATCHDOG_SECONDS") or "300")
+TTS_WATCHDOG_EXIT_CODE = 75
 TTS_REQUEST_MAX_TOKENS_LIMIT = 100000
 FFMPEG_TIMEOUT_SECONDS = float(os.getenv("AGENT_VOICE_FFMPEG_TIMEOUT_SECONDS") or "60")
 MAX_STT_UPLOAD_BYTES = int(os.getenv("AGENT_VOICE_MAX_STT_UPLOAD_BYTES") or str(25 * 1024 * 1024))
@@ -275,36 +277,62 @@ def generate_audio(
     # under concurrent generation. Serialize synthesis while keeping health and
     # STT requests independent.
     with _tts_generation_lock:
-        segments = _split_speech_text(text, TTS_MAX_SEGMENT_CHARS)
-        chunks: list[np.ndarray] = []
-        sample_rate = 24000
-        output_sample_rate: int | None = None
+        with _tts_watchdog(text):
+            segments = _split_speech_text(text, TTS_MAX_SEGMENT_CHARS)
+            chunks: list[np.ndarray] = []
+            sample_rate = 24000
+            output_sample_rate: int | None = None
 
-        for segment in segments:
-            for audio, sample_rate in _generate_audio_parts_for_segment(
-                model=model,
-                text=segment,
-                instruct=instruct,
-                language=language,
-                max_tokens=max_tokens,
-            ):
-                if audio.size == 0:
-                    continue
-                if output_sample_rate is None:
-                    output_sample_rate = sample_rate
-                elif sample_rate != output_sample_rate:
-                    raise RuntimeError(
-                        f"TTS segments returned inconsistent sample rates: {output_sample_rate} and {sample_rate}"
-                    )
-                if chunks:
-                    chunks.append(np.zeros(int(sample_rate * TTS_SEGMENT_SILENCE_SECONDS), dtype=audio.dtype))
-                chunks.append(audio)
+            for segment in segments:
+                for audio, sample_rate in _generate_audio_parts_for_segment(
+                    model=model,
+                    text=segment,
+                    instruct=instruct,
+                    language=language,
+                    max_tokens=max_tokens,
+                ):
+                    if audio.size == 0:
+                        continue
+                    if output_sample_rate is None:
+                        output_sample_rate = sample_rate
+                    elif sample_rate != output_sample_rate:
+                        raise RuntimeError(
+                            f"TTS segments returned inconsistent sample rates: {output_sample_rate} and {sample_rate}"
+                        )
+                    if chunks:
+                        chunks.append(np.zeros(int(sample_rate * TTS_SEGMENT_SILENCE_SECONDS), dtype=audio.dtype))
+                    chunks.append(audio)
 
-        if not chunks:
-            return b""
+            if not chunks:
+                return b""
 
-        audio = np.concatenate(chunks)
-        return _encode_audio(audio, output_sample_rate or sample_rate, response_format)
+            audio = np.concatenate(chunks)
+            return _encode_audio(audio, output_sample_rate or sample_rate, response_format)
+
+
+@contextmanager
+def _tts_watchdog(text: str) -> Any:
+    if TTS_WATCHDOG_SECONDS <= 0:
+        yield
+        return
+
+    timer = threading.Timer(TTS_WATCHDOG_SECONDS, _terminate_for_tts_watchdog, args=(text, TTS_WATCHDOG_SECONDS))
+    timer.daemon = True
+    timer.start()
+    try:
+        yield
+    finally:
+        timer.cancel()
+
+
+def _terminate_for_tts_watchdog(text: str, timeout_seconds: float) -> None:
+    print(
+        "TTS generation watchdog exceeded wall-clock budget; restarting agent-voice "
+        f"(timeout_seconds={timeout_seconds:g}, words={_word_count(text)})",
+        file=sys.stderr,
+        flush=True,
+    )
+    os._exit(TTS_WATCHDOG_EXIT_CODE)
 
 
 def _normalize_tts_response_format(response_format: str) -> str:
@@ -1284,6 +1312,7 @@ def _notify_health() -> dict[str, Any]:
         "known_voices_source": "local",
         "voice_queue_depth": queue_depth,
         "voice_queue_max_depth": NOTIFY_QUEUE_MAX_DEPTH,
+        "tts_watchdog_seconds": TTS_WATCHDOG_SECONDS,
         "rate_limit": NOTIFY_RATE_LIMIT,
         "rate_window_seconds": NOTIFY_RATE_WINDOW_SECONDS,
         "rate_client_limit": NOTIFY_RATE_CLIENT_LIMIT,
@@ -1331,6 +1360,7 @@ def health() -> dict[str, object]:
         "model": "qwen3-tts",
         "tts_model_id": TTS_MODEL_ID,
         "tts_max_tokens": TTS_MAX_TOKENS,
+        "tts_watchdog_seconds": TTS_WATCHDOG_SECONDS,
         "stt_model_id": STT_MODEL_ID,
         "stt_processor_id": STT_PROCESSOR_ID,
         "voices": list(VOICE_DESIGNS.keys()),
