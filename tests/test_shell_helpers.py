@@ -303,7 +303,7 @@ def test_agent_voice_summary_calls_mock_server_and_writes_output(tmp_path: Path)
     assert request.get("model", "qwen3-tts") == "qwen3-tts"
 
 
-def test_agent_voice_summary_defaults_to_peng_mythic(tmp_path: Path) -> None:
+def test_agent_voice_summary_defaults_to_questline_deadpan(tmp_path: Path) -> None:
     helper = require_executable("agent-voice-summary")
     output = tmp_path / "summary.wav"
 
@@ -323,7 +323,7 @@ def test_agent_voice_summary_defaults_to_peng_mythic(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert len(server.requests) == 1
-    assert server.requests[0].body["voice"] == "peng_mythic"
+    assert server.requests[0].body["voice"] == "questline_deadpan"
 
 
 def test_agent_voice_summary_sends_max_tokens_when_requested(tmp_path: Path) -> None:

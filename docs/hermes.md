@@ -18,7 +18,7 @@ The command backs up existing Hermes files under
 - `~/.hermes/config.yaml`
   - `tts.provider: openai`
   - `tts.openai.model: qwen3-tts`
-  - `tts.openai.voice: peng_mythic`
+  - `tts.openai.voice: questline_deadpan`
   - `tts.openai.base_url: http://127.0.0.1:8880/v1`
   - `voice.auto_tts: true`
 - `~/.hermes/.env`
@@ -62,7 +62,7 @@ tts:
   provider: openai
   openai:
     model: qwen3-tts
-    voice: peng_mythic
+    voice: questline_deadpan
     base_url: http://127.0.0.1:8880/v1
 voice:
   auto_tts: true

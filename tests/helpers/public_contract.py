@@ -24,6 +24,7 @@ PUBLIC_VOICES = {
     "cyberpunk_cool",
     "cyberpunk_cool_male",
     "peng_mythic",
+    "questline_deadpan",
     "male_boardroom_baritone_locked",
     "male_market_floor_tenor_locked",
     "male_editorial_bass_locked",

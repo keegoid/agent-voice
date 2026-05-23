@@ -71,7 +71,7 @@ default.
   - accepts JSON fields:
     - `model`, default `qwen3-tts`
     - `input`, required non-empty text
-    - `voice`, default `peng_mythic`
+    - `voice`, default `questline_deadpan`
     - `response_format`, default `wav`
     - `language`, default `English`
     - `instruct`, optional custom voice-design prompt
@@ -149,6 +149,7 @@ Public voice names are:
 - `male_editorial_bass_locked`
 - `male_mission_control_commander_locked`
 - `peng_mythic`
+- `questline_deadpan`
 - `anime_sultry`
 - `anime_energetic`
 - `anime_whisper`
@@ -231,7 +232,7 @@ Hermes configuration behavior:
   the local OpenAI-compatible speech endpoint:
   - `tts.provider: openai`
   - `tts.openai.model: qwen3-tts` unless overridden.
-  - `tts.openai.voice: peng_mythic` unless overridden.
+  - `tts.openai.voice: questline_deadpan` unless overridden.
   - `tts.openai.base_url: http://127.0.0.1:8880/v1` unless overridden.
   - `voice.auto_tts: true` by default.
 - It writes `VOICE_TOOLS_OPENAI_KEY=agent-voice-local` to `~/.hermes/.env`

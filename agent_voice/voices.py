@@ -117,6 +117,15 @@ VOICE_DESIGNS: dict[str, str] = {
         "become raspy, ancient, monster-like, or melodramatic."
         + _CONSISTENT_SPEAKER_LOCK
     ),
+    "questline_deadpan": (
+        "An adult woman voice actor delivering quiet progress cues like a mythic "
+        "quest update from a neon back alley. Energetic whisper, clipped timing, "
+        "dry deadpan confidence, and a subtle thrill when the path opens. She "
+        "sounds like black-market tech left in the rain, still working, and "
+        "pleased about it. Crisp diction, close-mic focus, bright decisive "
+        "finishes."
+        + _CONSISTENT_SPEAKER_LOCK
+    ),
     "anime_sultry": (
         "An adult woman voice actor with a smooth, intimate femme-fatale delivery. "
         "Low-to-mid pitch, deliberate pacing, close-mic warmth, and a controlled "
