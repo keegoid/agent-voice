@@ -160,7 +160,7 @@ PAI-compatible desktop notification and playback:
 ```bash
 curl -fsS http://127.0.0.1:8880/notify \
   -H 'Content-Type: application/json' \
-  -d '{"title":"PAI Notification","message":"The agent finished the task.","voice_id":"cyberpunk_cool","voice_enabled":true}'
+  -d '{"title":"PAI Notification","message":"The agent finished the task.","voice_id":"peng_mythic","voice_enabled":true}'
 ```
 
 Compatibility aliases are also available at `/notify/personality` and `/pai`.
@@ -207,7 +207,7 @@ Speech:
 ```bash
 curl -fsS http://127.0.0.1:8880/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3-tts","input":"The agent finished the task.","voice":"cyberpunk_cool","response_format":"wav","max_tokens":1200}' \
+  -d '{"model":"qwen3-tts","input":"The agent finished the task.","voice":"peng_mythic","response_format":"wav","max_tokens":1200}' \
   -o speech.wav
 ```
 
@@ -291,7 +291,7 @@ tts:
   provider: openai
   openai:
     model: qwen3-tts
-    voice: cyberpunk_cool
+    voice: peng_mythic
     base_url: http://127.0.0.1:8880/v1
 
 voice:

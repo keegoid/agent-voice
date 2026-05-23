@@ -158,9 +158,9 @@ def test_notify_endpoint_falls_back_from_old_voice_ids(
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert data["voice"] == "cyberpunk_cool"
+    assert data["voice"] == "peng_mythic"
     assert data["voice_fallback"] is True
-    assert seen["instruct"] == server.VOICE_DESIGNS["cyberpunk_cool"]
+    assert seen["instruct"] == server.VOICE_DESIGNS["peng_mythic"]
 
 
 def test_notify_endpoint_respects_master_mute(
@@ -374,7 +374,7 @@ def test_notify_health_reports_compatibility_state_without_generation(
     data = response.json()
     assert data["status"] == "healthy"
     assert data["voice_system"] == "agent-voice"
-    assert data["default_voice"] == "cyberpunk_cool"
+    assert data["default_voice"] == "peng_mythic"
     assert set(data["known_voices"]) >= PUBLIC_VOICES
     assert data["speak_spool_enabled"] is True
     assert data["speak_spool_path"]

@@ -18,7 +18,7 @@ from ruamel.yaml.comments import CommentedMap
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8880/v1"
 DEFAULT_MODEL = "qwen3-tts"
-DEFAULT_VOICE = "cyberpunk_cool"
+DEFAULT_VOICE = "peng_mythic"
 LOCAL_AUDIO_KEY = "agent-voice-local"
 
 
