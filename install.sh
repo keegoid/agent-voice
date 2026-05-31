@@ -18,6 +18,7 @@ BIN_DIR="$STATE_DIR/bin"
 BACKUP_ROOT="$STATE_DIR/backups"
 LOG_DIR="$STATE_DIR/logs"
 MODEL_CACHE="$STATE_DIR/model-cache"
+PRONUNCIATIONS_PATH="$STATE_DIR/pronunciations.json"
 LOCAL_BIN="$HOME/.local/bin"
 LABEL="com.keegoid.agent-voice"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -352,6 +353,21 @@ start_launchd_service() {
   return 1
 }
 
+seed_default_pronunciations() {
+  local source="$1"
+  [[ -f "$source" ]] || return 0
+  if [[ -e "$PRONUNCIATIONS_PATH" ]]; then
+    return 0
+  fi
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    would "seed default pronunciations $PRONUNCIATIONS_PATH"
+    return 0
+  fi
+  mkdir -p "$(dirname "$PRONUNCIATIONS_PATH")"
+  cp "$source" "$PRONUNCIATIONS_PATH"
+  chmod 644 "$PRONUNCIATIONS_PATH"
+}
+
 install_codex_block() {
   agents="$HOME/.codex/AGENTS.md"
   backup_path "$agents"
@@ -391,6 +407,7 @@ fi
 
 src="$(find_source_dir)"
 [[ -d "$src/agent_voice" ]] || { echo "Source directory missing agent_voice package: $src" >&2; exit 1; }
+[[ -f "$src/config/pronunciations.json" ]] || { echo "Source directory missing default pronunciations: $src/config/pronunciations.json" >&2; exit 1; }
 for required in \
   "$src/scripts/agent-voice" \
   "$src/scripts/agent-speak" \
@@ -414,12 +431,16 @@ else
     cp "$src/uv.lock" "$APP_DIR/uv.lock"
   fi
   cp "$src/README.md" "$APP_DIR/README.md"
+  mkdir -p "$APP_DIR/config"
+  cp "$src/config/pronunciations.json" "$APP_DIR/config/pronunciations.json"
   cp "$src/scripts/agent-voice" "$BIN_DIR/agent-voice"
   cp "$src/scripts/agent-speak" "$BIN_DIR/agent-speak"
   cp "$src/scripts/agent-voice-summary" "$BIN_DIR/agent-voice-summary"
   chmod 755 "$BIN_DIR/agent-voice" "$BIN_DIR/agent-speak" "$BIN_DIR/agent-voice-summary"
   rm -f "$STATE_DIR/server.py"
 fi
+
+seed_default_pronunciations "$src/config/pronunciations.json"
 
 if [[ "$TEST_MODE" != "1" && "$DRY_RUN" -ne 1 ]]; then
   say "Installing Python and MLX runtime dependencies into $APP_DIR"

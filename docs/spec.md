@@ -59,6 +59,9 @@ default.
   - load pronunciation replacements from
     `AGENT_VOICE_PRONUNCIATIONS_PATH` or `~/.agent-voice/pronunciations.json`
     with shape `{ "replacements": [{ "term": "...", "phonetic": "..." }] }`.
+    The installer seeds the default state file from
+    `config/pronunciations.json` when it is missing, without overwriting local
+    operator edits.
 - `GET /v1/mute`
   - returns the persistent master mute state.
 - `POST /v1/mute`

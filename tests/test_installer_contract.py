@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -113,6 +114,42 @@ def test_installer_honors_agent_voice_home(tmp_path: Path) -> None:
     assert (state / "app" / "agent_voice").is_dir()
     assert (state / "bin" / "agent-voice").is_file()
     assert not (home / ".agent-voice" / "app").exists()
+
+
+def test_installer_seeds_default_pronunciations_when_missing(tmp_path: Path) -> None:
+    installer = require_installer()
+    home = tmp_path / "home"
+
+    result = run_with_home([str(installer), "--no-codex-config"], tmp_path, timeout=20)
+
+    assert result.returncode == 0, result.stderr
+    pronunciations = home / ".agent-voice" / "pronunciations.json"
+    payload = json.loads(pronunciations.read_text(encoding="utf-8"))
+    replacements = {item["term"]: item["phonetic"] for item in payload["replacements"]}
+    assert replacements["PAI"] == "pie"
+    assert replacements["ISC"] == "I S C"
+
+
+def test_installer_preserves_existing_pronunciations(tmp_path: Path) -> None:
+    installer = require_installer()
+    home = tmp_path / "home"
+    pronunciations = home / ".agent-voice" / "pronunciations.json"
+    pronunciations.parent.mkdir(parents=True)
+    existing = {
+        "replacements": [
+            {
+                "term": "LocalOnly",
+                "phonetic": "local only",
+                "note": "operator-specific pronunciation",
+            }
+        ]
+    }
+    pronunciations.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+
+    result = run_with_home([str(installer), "--no-codex-config"], tmp_path, timeout=20)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(pronunciations.read_text(encoding="utf-8")) == existing
 
 
 def test_end_to_end_install_disables_existing_local_server_py(tmp_path: Path) -> None:

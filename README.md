@@ -55,10 +55,20 @@ require `--archive-sha256 <sha256>`.
 - Command shims: `~/.local/bin/agent-voice`, `agent-speak`,
   `agent-voice-summary`
 - LaunchAgent: `com.keegoid.agent-voice`
+- Default pronunciation seed: `config/pronunciations.json`, copied to
+  `~/.agent-voice/pronunciations.json` only when that state file does not
+  already exist
 - Optional Codex config block in `~/.codex/AGENTS.md`, only after approval
 
 Before changing an existing file, the installer writes a timestamped backup to
 `~/.agent-voice/backups/<id>/`.
+
+If `~/.agent-voice` is deleted, reinstalling from this repository recreates the
+app copy, virtualenv, command shims, LaunchAgent, manifest, and seeded
+pronunciation defaults. Model files under `model-cache` are redownloaded on
+demand. Local logs, restore backups, Paperclip speaker-label cache, and the
+current mute toggle are runtime state; losing them does not remove source code,
+but it does remove local history and cached/offline conveniences.
 
 ## Model Download
 
