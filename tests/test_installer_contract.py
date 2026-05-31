@@ -439,6 +439,7 @@ def test_agent_voice_restart_bootstraps_after_unload_without_force_kickstart(tmp
 
     install = run_with_home([str(installer)], tmp_path, input_text="n\n", extra_env=env, timeout=20)
     assert install.returncode == 0, install.stderr
+    state.touch()
 
     command = installed_command(tmp_path, "agent-voice")
     restart = run_with_home([str(command), "restart"], tmp_path, extra_env=env, timeout=20)
@@ -446,3 +447,54 @@ def test_agent_voice_restart_bootstraps_after_unload_without_force_kickstart(tmp
     assert restart.returncode == 0, restart.stderr
     assert state.exists()
     assert "kickstart -k" not in log.read_text(encoding="utf-8")
+
+
+def test_agent_voice_restart_force_kickstarts_when_unload_leaves_job_loaded(tmp_path: Path) -> None:
+    installer = require_installer()
+    home = tmp_path / "home"
+    fake_bin = tmp_path / "fake-bin"
+    state = tmp_path / "launchd.state"
+    log = tmp_path / "launchctl.log"
+    make_fake_bin(
+        fake_bin,
+        "launchctl",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s\\n' "$*" >> "{log}"
+        case "$1" in
+          print)
+            if [[ -f "{state}" ]]; then
+              exit 0
+            fi
+            exit 42
+            ;;
+          bootout)
+            exit 0
+            ;;
+          bootstrap)
+            touch "{state}"
+            exit 0
+            ;;
+          kickstart)
+            if [[ "$2" = "-k" ]]; then
+              touch "{state}"
+              exit 0
+            fi
+            exit 42
+            ;;
+        esac
+        exit 0
+        """,
+    )
+    env = {"PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}"}
+
+    install = run_with_home([str(installer)], tmp_path, input_text="n\n", extra_env=env, timeout=20)
+    assert install.returncode == 0, install.stderr
+    state.touch()
+
+    command = installed_command(tmp_path, "agent-voice")
+    restart = run_with_home([str(command), "restart"], tmp_path, extra_env=env, timeout=20)
+
+    assert restart.returncode == 0, restart.stderr
+    assert state.exists()
+    assert "kickstart -k gui/" in log.read_text(encoding="utf-8")

@@ -142,8 +142,48 @@ start_service() {
 }
 
 stop_service() {
-  launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || launchctl bootout "$DOMAIN" "$PLIST" 2>/dev/null || true
-  wait_for_service_unloaded || true
+  local err_file
+
+  if ! service_loaded; then
+    return 0
+  fi
+
+  err_file="$(mktemp "${TMPDIR:-/tmp}/agent-voice-launchctl.XXXXXX")"
+  if ! launchctl bootout "$DOMAIN/$LABEL" 2>"$err_file"; then
+    if ! launchctl bootout "$DOMAIN" "$PLIST" 2>>"$err_file"; then
+      cat "$err_file" >&2
+      rm -f "$err_file"
+      return 1
+    fi
+  fi
+  rm -f "$err_file"
+
+  if wait_for_service_unloaded; then
+    return 0
+  fi
+
+  echo "launchctl did not unload $LABEL" >&2
+  return 1
+}
+
+restart_service() {
+  if ! service_loaded; then
+    start_service
+    return
+  fi
+
+  if stop_service; then
+    start_service
+    return
+  fi
+
+  if service_loaded; then
+    echo "launchctl bootout did not unload $LABEL; forcing restart with kickstart -k" >&2
+    launchctl kickstart -k "$DOMAIN/$LABEL"
+    return
+  fi
+
+  start_service
 }
 
 restore_or_remove_shim() {
@@ -237,8 +277,7 @@ case "$cmd" in
     launchctl bootout "$DOMAIN/$old_label" 2>/dev/null || launchctl bootout "$DOMAIN" "$old_plist" 2>/dev/null || true
     ;;
   restart)
-    "$0" stop
-    "$0" start
+    restart_service
     ;;
   logs)
     tail -n 120 -f "$STATE_DIR/logs/server.log" "$STATE_DIR/logs/server.err.log"
