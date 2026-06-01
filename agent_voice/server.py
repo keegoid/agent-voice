@@ -1314,7 +1314,13 @@ def _drain_speak_spool_once() -> None:
         print(f"Speech spool unavailable at {spool_dir}: {exc}", file=sys.stderr)
         return
 
-    for path in sorted(spool_dir.glob("*.json")):
+    try:
+        paths = sorted(spool_dir.glob("*.json"))
+    except OSError as exc:
+        print(f"Speech spool unavailable at {spool_dir}: {exc}", file=sys.stderr)
+        return
+
+    for path in paths:
         processing = path.with_suffix(path.suffix + ".processing")
         try:
             path.replace(processing)

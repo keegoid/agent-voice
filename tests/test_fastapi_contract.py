@@ -414,6 +414,29 @@ def test_speak_spool_uses_existing_notification_audio_path(
     assert not request_path.exists()
 
 
+def test_speak_spool_scan_errors_do_not_escape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import agent_voice.server as server
+
+    spool = tmp_path / "spool"
+    original_glob = Path.glob
+
+    def failing_glob(path: Path, pattern: str) -> Any:
+        if path == spool and pattern == "*.json":
+            raise OSError("too many open files in system")
+        return original_glob(path, pattern)
+
+    monkeypatch.setenv("AGENT_VOICE_SPOOL_DIR", str(spool))
+    monkeypatch.setattr(Path, "glob", failing_glob)
+
+    server._drain_speak_spool_once()
+
+    captured = capsys.readouterr()
+    assert "Speech spool unavailable" in captured.err
+    assert "too many open files in system" in captured.err
+
+
 def test_speech_returns_silence_without_generation_when_muted(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,

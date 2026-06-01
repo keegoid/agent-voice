@@ -138,6 +138,58 @@ def test_agent_speak_spools_when_helper_cannot_reach_server(tmp_path: Path) -> N
     assert payload["voice_id"] == "warm_wisdom"
 
 
+def test_agent_speak_spool_temp_template_is_portable(tmp_path: Path) -> None:
+    agent_speak = require_executable("agent-speak")
+    spool = tmp_path / "spool"
+    mktemp_template = tmp_path / "mktemp-template.txt"
+    home_bin = tmp_path / "home" / ".local" / "bin"
+    make_fake_bin(
+        home_bin,
+        "mktemp",
+        f"""
+        #!/usr/bin/env bash
+        printf '%s\\n' "$1" > "{mktemp_template}"
+        case "$1" in
+          *XXXXXX)
+            path="${{1%XXXXXX}}abc123"
+            : > "$path"
+            printf '%s\\n' "$path"
+            ;;
+          *)
+            echo "mktemp template must end with XXXXXX" >&2
+            exit 64
+            ;;
+        esac
+        """,
+    )
+    helper = make_fake_bin(
+        tmp_path / "bin",
+        "fake-voice-helper",
+        """
+        #!/usr/bin/env bash
+        exit 7
+        """,
+    )
+
+    result = run_with_home(
+        [str(agent_speak), "hello from portable spool"],
+        tmp_path,
+        extra_env={
+            "AGENT_VOICE_HELPER": str(helper),
+            "AGENT_VOICE_SPEAK_SYNC": "1",
+            "AGENT_VOICE_SPEAK_LOCK": str(tmp_path / "speak.lock"),
+            "AGENT_VOICE_SPOOL_DIR": str(spool),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert mktemp_template.read_text(encoding="utf-8").strip().endswith(".agent-speak.XXXXXX")
+    queued = list(spool.glob("*.json"))
+    assert len(queued) == 1
+    payload = json.loads(queued[0].read_text(encoding="utf-8"))
+    assert payload["message"] == "hello from portable spool"
+
+
 class MockPaperclipServer:
     def __init__(self) -> None:
         self.requests: list[str] = []
