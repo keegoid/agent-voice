@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 from pathlib import Path
 
 from tests.helpers.public_contract import (
@@ -114,6 +115,26 @@ def test_installer_honors_agent_voice_home(tmp_path: Path) -> None:
     assert (state / "app" / "agent_voice").is_dir()
     assert (state / "bin" / "agent-voice").is_file()
     assert not (home / ".agent-voice" / "app").exists()
+
+
+def test_installer_sets_short_uvicorn_graceful_shutdown(tmp_path: Path) -> None:
+    installer = require_installer()
+    home = tmp_path / "home"
+    fake_bin = tmp_path / "fake-bin"
+    make_fake_bin(fake_bin, "launchctl", "#!/bin/sh\nexit 0\n")
+
+    result = run_with_home(
+        [str(installer), "--no-codex-config"],
+        tmp_path,
+        extra_env={"PATH": f"{fake_bin}:{home / '.local' / 'bin'}:{getattr(os, 'environ').get('PATH', '')}"},
+        timeout=20,
+    )
+
+    assert result.returncode == 0, result.stderr
+    plist_path = home / "Library" / "LaunchAgents" / "com.keegoid.agent-voice.plist"
+    plist = plistlib.loads(plist_path.read_bytes())
+    args = plist["ProgramArguments"]
+    assert args[args.index("--timeout-graceful-shutdown") + 1] == "2"
 
 
 def test_installer_seeds_default_pronunciations_when_missing(tmp_path: Path) -> None:

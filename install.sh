@@ -284,6 +284,8 @@ write_plist() {
     <string>127.0.0.1</string>
     <string>--port</string>
     <string>8880</string>
+    <string>--timeout-graceful-shutdown</string>
+    <string>2</string>
   </array>
   <key>WorkingDirectory</key>
   <string>$APP_DIR</string>
