@@ -4,7 +4,7 @@
 set -euo pipefail
 
 server_url="${AGENT_VOICE_SERVER:-http://127.0.0.1:8880}"
-voice="${AGENT_VOICE_VOICE:-questline_deadpan}"
+voice="${AGENT_VOICE_VOICE:-cool_street_deadpan}"
 speech_timeout="${AGENT_VOICE_SPEECH_TIMEOUT_SECONDS:-600}"
 playback_timeout="${AGENT_VOICE_PLAYBACK_TIMEOUT_SECONDS:-}"
 max_playback_seconds="${AGENT_VOICE_MAX_PLAYBACK_SECONDS:-180}"
@@ -20,7 +20,7 @@ Usage:
   echo "summary text" | agent-voice-summary [options]
 
 Options:
-  -v, --voice NAME      Voice name. Default: questline_deadpan.
+  -v, --voice NAME      Voice name. Default: cool_street_deadpan.
   -i, --instruct TEXT   Custom voice-design prompt; skips server voice lookup.
   --max-tokens N        Per-request TTS token budget.
   -s, --server URL      TTS server URL. Default: http://127.0.0.1:8880.
