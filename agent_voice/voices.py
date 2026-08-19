@@ -96,7 +96,8 @@ _MALE_MISSION_CONTROL_COMMANDER = (
 
 _COOL_STREET_DEADPAN = (
     "A young woman voice actor with a mid-range tone and dry deadpan confidence. "
-    "Street-smart, neon-lit back-alley energy."
+    "Street-smart, neon-lit back-alley cool under pressure. "
+    "Not bubbly and no high-pitched or fast-paced genki."
     + _CONSISTENT_SPEAKER
 )
 
