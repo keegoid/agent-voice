@@ -11,7 +11,14 @@ _CONSISTENT_SPEAKER = (
 )
 
 _CHESAPEAKE_BALANCED = (
-    "A warm British baritone, friendly and steady, not too formal, like someone "
+    "A warm adult male British baritone, friendly and steady, not too formal, "
+    "like someone "
+    "who's right there with you. Clear, reassuring, but never stiff."
+)
+
+_CHESAPEAKE_BALANCED_FEMALE = (
+    "A warm adult female British contralto, friendly and steady, not too formal, "
+    "like someone "
     "who's right there with you. Clear, reassuring, but never stiff."
 )
 
@@ -173,6 +180,7 @@ _SULTRY_COMMANDING = (
 
 VOICE_DESIGNS: dict[str, str] = {
     "chesapeake_balanced": _CHESAPEAKE_BALANCED,
+    "chesapeake_balanced_female": _CHESAPEAKE_BALANCED_FEMALE,
     "anime_genki": _ANIME_GENKI,
     "anime_villain": _ANIME_VILLAIN,
     "cyberpunk_cool": _CYBERPUNK_COOL,

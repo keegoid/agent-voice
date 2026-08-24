@@ -20,6 +20,7 @@ PUBLIC_VOICES = {
     "anime_genki",
     "anime_villain",
     "chesapeake_balanced",
+    "chesapeake_balanced_female",
     "cool_figment_rain",
     "cool_street_deadpan",
     "cyberpunk_cool",
