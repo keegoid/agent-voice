@@ -87,13 +87,17 @@ experiments; treat it as trust-sensitive because it controls Hugging Face model
 loading.
 
 Speech generation defaults to `AGENT_VOICE_TTS_MAX_TOKENS=1200`. There is no
-request character cap; long requests are split into bounded synthesis segments
-and concatenated so agent summaries can stay useful without caller-side
-trimming. If a generated segment is implausibly short for the text length, the
-server retries it once with more conservative sampling. The short-clip detector
-also covers terse agent status cues and clips that speak only at the beginning
-then continue as silence. If retry and sentence-level fallback still look
-collapsed, the server rejects the clip instead of returning playable audio.
+request character cap; inputs longer than `AGENT_VOICE_TTS_MAX_SEGMENT_CHARS`
+(default `2400`) are split into bounded synthesis segments and concatenated.
+Normal agent cues up to roughly 1200 characters therefore stay in one continuous
+generation. Necessary long-input segments reset the same per-voice MLX seed;
+`AGENT_VOICE_TTS_SEED` changes that deterministic seed base. If a generated
+segment is implausibly short for the text length, the server retries the same
+continuous segment once with more conservative sampling. It never falls back to
+separate sentence requests, because that can change speaker character mid-cue.
+The short-clip detector also covers terse agent status cues and clips that speak
+only at the beginning then continue as silence. If the continuous retry remains
+collapsed, the server rejects the clip instead of returning inconsistent audio.
 Tune it with
 `AGENT_VOICE_TTS_SUSPICIOUS_MIN_WORDS`,
 `AGENT_VOICE_TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND`, and
@@ -102,6 +106,15 @@ the longest contiguous active-speech span using `AGENT_VOICE_TTS_ACTIVITY_WINDOW
 `AGENT_VOICE_TTS_ACTIVITY_MIN_RMS`, and
 `AGENT_VOICE_TTS_ACTIVITY_RELATIVE_RMS`.
 Segment joins use `AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS=0.18` by default.
+MLX generation runs incrementally with
+`AGENT_VOICE_TTS_STREAMING_INTERVAL_SECONDS=2`, allowing the output-duration
+guard to stop runaway generation before the full token budget is exhausted.
+The reasonable-duration guard defaults to twice the generous expected duration;
+`AGENT_VOICE_TTS_MAX_EXPECTED_DURATION_MULTIPLIER` overrides that multiplier.
+The HTTP response remains buffered as one audio file. Successful responses
+include `Server-Timing` phases for model loading, generation-lock queueing,
+synthesis, and encoding, plus `X-Agent-Voice-Audio-Seconds` and
+`X-Agent-Voice-Segments`; the same phase data is written to the server log.
 During active synthesis, the server starts a wall-clock watchdog helper process
 (`AGENT_VOICE_TTS_WATCHDOG_SECONDS=300` by default). If the MLX generator gets
 wedged inside one serialized TTS request, the helper terminates the server so

@@ -548,6 +548,33 @@ def test_speech_accepts_hermes_mp3_response_format(monkeypatch: pytest.MonkeyPat
     assert seen["response_format"] == "mp3"
 
 
+def test_speech_reports_generation_phase_timing_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = locate_fastapi_app()
+
+    def fake_generation(*_args: Any, **kwargs: Any) -> bytes:
+        metrics = kwargs["metrics"]
+        metrics.model_seconds = 0.001
+        metrics.queue_seconds = 0.002
+        metrics.synthesis_seconds = 0.003
+        metrics.encode_seconds = 0.004
+        metrics.audio_seconds = 1.25
+        metrics.segment_count = 1
+        return b"RIFFfakeWAVEfmt "
+
+    patch_generation(monkeypatch, app, fake_generation)
+    response = TestClient(app).post(
+        "/v1/audio/speech",
+        json={"input": "hello", "voice": "cyberpunk_cool", "response_format": "wav"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-agent-voice-audio-seconds"] == "1.250"
+    assert response.headers["x-agent-voice-segments"] == "1"
+    assert response.headers["server-timing"] == (
+        "model;dur=1.0, queue;dur=2.0, synthesis;dur=3.0, encode;dur=4.0"
+    )
+
+
 def test_speech_accepts_hermes_opus_response_format(monkeypatch: pytest.MonkeyPatch) -> None:
     app = locate_fastapi_app()
 
@@ -954,6 +981,7 @@ def test_generate_audio_segment_once_stops_streaming_past_reasonable_duration(
     import agent_voice.server as server
 
     yielded = 0
+    seen: dict[str, Any] = {}
     sample_rate = 24000
 
     class FakeResult:
@@ -964,8 +992,9 @@ def test_generate_audio_segment_once_stops_streaming_past_reasonable_duration(
             self.audio = server.np.full(sample_rate, 0.1, dtype=server.np.float32)
 
     class FakeModel:
-        def generate_voice_design(self, **_kwargs: Any) -> Any:
+        def generate_voice_design(self, **kwargs: Any) -> Any:
             nonlocal yielded
+            seen.update(kwargs)
             for _ in range(5):
                 yielded += 1
                 yield FakeResult()
@@ -979,12 +1008,15 @@ def test_generate_audio_segment_once_stops_streaming_past_reasonable_duration(
         language="English",
         max_tokens=999,
         attempt=0,
+        seed=123,
     )
 
     assert returned_sample_rate == sample_rate
     assert yielded == 2
     assert token_count == 200
     assert audio.size / returned_sample_rate == pytest.approx(2.0)
+    assert seen["stream"] is True
+    assert seen["streaming_interval"] == server.TTS_STREAMING_INTERVAL_SECONDS
 
 
 def test_generate_audio_uses_stable_sampling_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1016,12 +1048,14 @@ def test_generate_audio_uses_stable_sampling_defaults(monkeypatch: pytest.Monkey
     assert seen[0]["temperature"] == server.TTS_TEMPERATURE
     assert seen[0]["top_p"] == server.TTS_TOP_P
     assert seen[0]["repetition_penalty"] == server.TTS_REPETITION_PENALTY
+    assert seen[0]["stream"] is True
 
 
 def test_generate_audio_uses_more_conservative_retry_sampling(monkeypatch: pytest.MonkeyPatch) -> None:
     import agent_voice.server as server
 
     seen: list[dict[str, Any]] = []
+    seeds: list[int] = []
 
     class FakeResult:
         sample_rate = 24000
@@ -1038,6 +1072,7 @@ def test_generate_audio_uses_more_conservative_retry_sampling(monkeypatch: pytes
             return [FakeResult(server.np.full(24000 * 3, 0.1, dtype=server.np.float32))]
 
     monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+    monkeypatch.setattr(server, "_seed_tts_generation", seeds.append)
 
     audio = server.generate_audio(
         text="Retry sampling should reduce noisy collapsed output",
@@ -1052,6 +1087,7 @@ def test_generate_audio_uses_more_conservative_retry_sampling(monkeypatch: pytes
     assert seen[1]["temperature"] == server.TTS_RETRY_TEMPERATURE
     assert seen[1]["top_p"] == server.TTS_RETRY_TOP_P
     assert seen[1]["repetition_penalty"] == server.TTS_RETRY_REPETITION_PENALTY
+    assert seeds == [seeds[0], seeds[0]]
 
 
 def test_encode_audio_sanitizes_and_limits_peak() -> None:
@@ -1217,7 +1253,7 @@ def test_generate_audio_uses_continuous_generation_for_short_multi_sentence_text
     assert seen_texts == [text]
 
 
-def test_generate_audio_falls_back_to_sentences_only_after_continuous_collapse(
+def test_generate_audio_rejects_continuous_collapse_without_sentence_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import agent_voice.server as server
@@ -1249,24 +1285,54 @@ def test_generate_audio_falls_back_to_sentences_only_after_continuous_collapse(
     monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
     monkeypatch.setattr(server, "TTS_GENERATION_ATTEMPTS", 2)
 
-    audio = server.generate_audio(
-        text=text,
+    with pytest.raises(server.SuspiciousTTSOutputError):
+        server.generate_audio(
+            text=text,
+            instruct="clear voice",
+            language="English",
+            response_format="wav",
+            max_tokens=123,
+        )
+
+    assert seen_texts == [text, text]
+
+
+def test_generate_audio_resets_same_voice_seed_for_long_input_segments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_voice.server as server
+
+    seeds: list[int] = []
+    seen_texts: list[str] = []
+
+    class FakeResult:
+        audio = server.np.full(24000 * 3, 0.1, dtype=server.np.float32)
+        sample_rate = 24000
+        token_count = 100
+
+    class FakeModel:
+        def generate_voice_design(self, **kwargs: Any) -> list[FakeResult]:
+            seen_texts.append(kwargs["text"])
+            return [FakeResult()]
+
+    monkeypatch.setattr(server, "get_tts_model", lambda: FakeModel())
+    monkeypatch.setattr(server, "_seed_tts_generation", seeds.append)
+    monkeypatch.setattr(server, "TTS_MAX_SEGMENT_CHARS", 65)
+
+    server.generate_audio(
+        text=(
+            "First long sentence stays in the selected speaker character. "
+            "Second long sentence keeps the exact same speaker character."
+        ),
         instruct="clear voice",
         language="English",
         response_format="wav",
         max_tokens=123,
     )
 
-    with wave.open(io.BytesIO(audio), "rb") as wav:
-        duration = wav.getnframes() / wav.getframerate()
-
-    assert seen_texts == [
-        text,
-        text,
-        "First sentence should synthesize cleanly.",
-        "Second sentence should also synthesize cleanly.",
-    ]
-    assert duration == pytest.approx(4.18)
+    assert len(seen_texts) == 2
+    assert len(seeds) == 2
+    assert seeds[0] == seeds[1]
 
 
 def test_speech_rejects_unsupported_response_format() -> None:
