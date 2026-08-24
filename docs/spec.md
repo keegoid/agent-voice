@@ -94,9 +94,10 @@ default.
     clips that speak only at the beginning then continue as silence. If retry
     and sentence-level fallback still look collapsed, rejects the segment
     instead of returning playable audio.
-  - uses stable Qwen3 sampling defaults (`AGENT_VOICE_TTS_TEMPERATURE=0.9`,
+  - uses conservative Qwen3 sampling defaults (`AGENT_VOICE_TTS_TEMPERATURE=0.7`,
     `AGENT_VOICE_TTS_TOP_P=0.95`, `AGENT_VOICE_TTS_REPETITION_PENALTY=1.05`)
-    and more conservative `AGENT_VOICE_TTS_RETRY_*` defaults for retries.
+    and more conservative `AGENT_VOICE_TTS_RETRY_*` defaults for retries,
+    including `AGENT_VOICE_TTS_RETRY_TEMPERATURE=0.6`.
   - uses contiguous active-speech duration, not total audio file length, for
     suspiciously short segment detection.
   - sanitizes non-finite waveform samples and peak-limits generated audio to
@@ -144,6 +145,7 @@ Public voice names are:
 - `anime_genki`
 - `anime_villain`
 - `chesapeake_balanced` (default)
+- `chesapeake_balanced_female`
 - `cool_figment_rain`
 - `cool_street_deadpan`
 - `cyberpunk_cool`
