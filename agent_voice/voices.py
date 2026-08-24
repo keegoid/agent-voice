@@ -10,6 +10,11 @@ _CONSISTENT_SPEAKER = (
     "character, register, accent, or age between sentences."
 )
 
+_CHESAPEAKE_BALANCED = (
+    "A warm British baritone, friendly and steady, not too formal, like someone "
+    "who's right there with you. Clear, reassuring, but never stiff."
+)
+
 _ANIME_GENKI = (
     "An adult woman voice actor with bright anime-heroine energy and quick, "
     "buoyant phrasing. Cheerful, expressive, high-focus enthusiasm, like she "
@@ -167,6 +172,7 @@ _SULTRY_COMMANDING = (
 )
 
 VOICE_DESIGNS: dict[str, str] = {
+    "chesapeake_balanced": _CHESAPEAKE_BALANCED,
     "anime_genki": _ANIME_GENKI,
     "anime_villain": _ANIME_VILLAIN,
     "cyberpunk_cool": _CYBERPUNK_COOL,

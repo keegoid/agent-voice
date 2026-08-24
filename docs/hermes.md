@@ -18,7 +18,7 @@ The command backs up existing Hermes files under
 - `~/.hermes/config.yaml`
   - `tts.provider: openai`
   - `tts.openai.model: qwen3-tts`
-  - `tts.openai.voice: cool_street_deadpan`
+  - `tts.openai.voice: chesapeake_balanced`
   - `tts.openai.base_url: http://127.0.0.1:8880/v1`
   - `voice.auto_tts: true`
 - `~/.hermes/.env`
@@ -36,7 +36,7 @@ agent-voice configure hermes --dry-run
 Use a different preset voice:
 
 ```bash
-agent-voice configure hermes --voice warm_wisdom --restart-gateway
+agent-voice configure hermes --voice cool_street_deadpan --restart-gateway
 ```
 
 Use a different local model alias:
@@ -62,7 +62,7 @@ tts:
   provider: openai
   openai:
     model: qwen3-tts
-    voice: cool_street_deadpan
+    voice: chesapeake_balanced
     base_url: http://127.0.0.1:8880/v1
 voice:
   auto_tts: true
