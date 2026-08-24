@@ -86,14 +86,18 @@ default.
   - rejects other `response_format` values with HTTP 400.
   - when master mute is enabled, returns valid silent audio for the requested
     response format without loading or calling the TTS model.
-  - does not impose a request character cap. Long requests may be split into
-    multiple synthesis segments server-side and concatenated into one response
-    audio file.
+  - does not impose a request character cap. Inputs through
+    `AGENT_VOICE_TTS_MAX_SEGMENT_CHARS=2400` stay in one continuous generation.
+    Longer requests may be split into multiple synthesis segments server-side
+    and concatenated into one response audio file.
   - defaults to `AGENT_VOICE_TTS_MAX_TOKENS=1200` and retries suspiciously
     short generated segments once by default, including terse status cues and
-    clips that speak only at the beginning then continue as silence. If retry
-    and sentence-level fallback still look collapsed, rejects the segment
-    instead of returning playable audio.
+    clips that speak only at the beginning then continue as silence. Retry keeps
+    the complete segment continuous; the server does not fall back to separate
+    sentence requests. If retry still looks collapsed, rejects the segment
+    instead of returning inconsistent audio.
+  - resets the same per-voice MLX seed for every necessary long-input segment.
+    `AGENT_VOICE_TTS_SEED=0` is the default seed base.
   - uses conservative Qwen3 sampling defaults (`AGENT_VOICE_TTS_TEMPERATURE=0.7`,
     `AGENT_VOICE_TTS_TOP_P=0.95`, `AGENT_VOICE_TTS_REPETITION_PENALTY=1.05`)
     and more conservative `AGENT_VOICE_TTS_RETRY_*` defaults for retries,
@@ -105,13 +109,21 @@ default.
     transcoding.
   - inserts `AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS=0.18` seconds of silence
     between generated segments by default.
+  - requests incremental MLX generation with
+    `AGENT_VOICE_TTS_STREAMING_INTERVAL_SECONDS=2` so runaway output can be
+    stopped before the full generation finishes. The response is still one
+    buffered audio file rather than progressive network playback.
+  - bounds reasonable output duration using
+    `AGENT_VOICE_TTS_MAX_EXPECTED_DURATION_MULTIPLIER=2` by default.
   - starts a watchdog helper process during serialized generation using
     `AGENT_VOICE_TTS_WATCHDOG_SECONDS=300`. If the generator exceeds that
     wall-clock budget, the helper terminates the server so launchd restarts it
     and clears the stuck TTS lock. `AGENT_VOICE_TTS_WATCHDOG_KILL_GRACE_SECONDS=5`
     controls the SIGTERM-to-SIGKILL grace period. A watchdog budget of `0`
     disables the guard.
-  - returns generated audio bytes with the correct audio media type.
+  - returns generated audio bytes with the correct audio media type. Successful
+    responses include `Server-Timing` model, queue, synthesis, and encoding
+    phases plus `X-Agent-Voice-Audio-Seconds` and `X-Agent-Voice-Segments`.
   - returns HTTP 500 if the model generates no audio or if generation fails.
 - `POST /v1/audio/transcriptions`
   - accepts multipart form data with:

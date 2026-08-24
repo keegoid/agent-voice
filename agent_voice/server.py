@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import inspect
 import ipaddress
@@ -39,8 +40,10 @@ os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 STT_PROCESSOR_ID = os.getenv("AGENT_VOICE_STT_PROCESSOR_ID", "openai/whisper-large-v3")
 TTS_MAX_TOKENS = int(os.getenv("AGENT_VOICE_TTS_MAX_TOKENS") or "1200")
 TTS_GENERATION_ATTEMPTS = int(os.getenv("AGENT_VOICE_TTS_GENERATION_ATTEMPTS") or "2")
-TTS_MAX_SEGMENT_CHARS = int(os.getenv("AGENT_VOICE_TTS_MAX_SEGMENT_CHARS") or "1200")
+TTS_MAX_SEGMENT_CHARS = int(os.getenv("AGENT_VOICE_TTS_MAX_SEGMENT_CHARS") or "2400")
 TTS_SEGMENT_SILENCE_SECONDS = float(os.getenv("AGENT_VOICE_TTS_SEGMENT_SILENCE_SECONDS") or "0.18")
+TTS_STREAMING_INTERVAL_SECONDS = float(os.getenv("AGENT_VOICE_TTS_STREAMING_INTERVAL_SECONDS") or "2")
+TTS_SEED = int(os.getenv("AGENT_VOICE_TTS_SEED") or "0")
 TTS_TEMPERATURE = float(os.getenv("AGENT_VOICE_TTS_TEMPERATURE") or "0.7")
 TTS_TOP_P = float(os.getenv("AGENT_VOICE_TTS_TOP_P") or "0.95")
 TTS_REPETITION_PENALTY = float(os.getenv("AGENT_VOICE_TTS_REPETITION_PENALTY") or "1.05")
@@ -54,6 +57,9 @@ TTS_SUSPICIOUS_MAX_WORDS_PER_SECOND = float(
 )
 TTS_SUSPICIOUS_MIN_SECONDS = float(os.getenv("AGENT_VOICE_TTS_SUSPICIOUS_MIN_SECONDS") or "1.0")
 TTS_MAX_OUTPUT_SECONDS = float(os.getenv("AGENT_VOICE_TTS_MAX_OUTPUT_SECONDS") or "180")
+TTS_MAX_EXPECTED_DURATION_MULTIPLIER = float(
+    os.getenv("AGENT_VOICE_TTS_MAX_EXPECTED_DURATION_MULTIPLIER") or "2"
+)
 TTS_ACTIVITY_WINDOW_SECONDS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_WINDOW_SECONDS") or "0.25")
 TTS_ACTIVITY_MIN_RMS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_MIN_RMS") or "0.004")
 TTS_ACTIVITY_RELATIVE_RMS = float(os.getenv("AGENT_VOICE_TTS_ACTIVITY_RELATIVE_RMS") or "0.08")
@@ -115,6 +121,27 @@ class AudioFormatError(RuntimeError):
 
 class SuspiciousTTSOutputError(RuntimeError):
     """Raised when generated speech is implausibly short or long for the requested text."""
+
+
+@dataclass
+class TTSGenerationMetrics:
+    model_seconds: float = 0.0
+    queue_seconds: float = 0.0
+    synthesis_seconds: float = 0.0
+    encode_seconds: float = 0.0
+    total_seconds: float = 0.0
+    audio_seconds: float = 0.0
+    segment_count: int = 0
+
+    def server_timing(self) -> str:
+        return ", ".join(
+            (
+                f"model;dur={self.model_seconds * 1000:.1f}",
+                f"queue;dur={self.queue_seconds * 1000:.1f}",
+                f"synthesis;dur={self.synthesis_seconds * 1000:.1f}",
+                f"encode;dur={self.encode_seconds * 1000:.1f}",
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -271,26 +298,38 @@ def generate_audio(
     language: str,
     response_format: str,
     max_tokens: int = TTS_MAX_TOKENS,
+    metrics: TTSGenerationMetrics | None = None,
 ) -> bytes:
     """Generate audio bytes for a validated speech request."""
+    request_started = time.perf_counter()
+    metrics = metrics or TTSGenerationMetrics()
+    model_started = time.perf_counter()
     model = get_tts_model()
+    metrics.model_seconds = time.perf_counter() - model_started
     # The MLX/Qwen TTS runtime is process-global and has shown native crashes
     # under concurrent generation. Serialize synthesis while keeping health and
     # STT requests independent.
+    queue_started = time.perf_counter()
     with _tts_generation_lock:
+        metrics.queue_seconds = time.perf_counter() - queue_started
         segments = _split_speech_text(text, TTS_MAX_SEGMENT_CHARS)
+        metrics.segment_count = len(segments)
         chunks: list[np.ndarray] = []
         sample_rate = 24000
         output_sample_rate: int | None = None
+        synthesis_started = time.perf_counter()
+        seed = _tts_seed_for_voice(instruct, language)
 
-        for segment in segments:
-            for audio, sample_rate in _generate_audio_parts_for_segment(
-                model=model,
-                text=segment,
-                instruct=instruct,
-                language=language,
-                max_tokens=max_tokens,
-            ):
+        try:
+            for segment in segments:
+                audio, sample_rate = _generate_audio_segment(
+                    model=model,
+                    text=segment,
+                    instruct=instruct,
+                    language=language,
+                    max_tokens=max_tokens,
+                    seed=seed,
+                )
                 if audio.size == 0:
                     continue
                 if output_sample_rate is None:
@@ -302,12 +341,43 @@ def generate_audio(
                 if chunks:
                     chunks.append(np.zeros(int(sample_rate * TTS_SEGMENT_SILENCE_SECONDS), dtype=audio.dtype))
                 chunks.append(audio)
+        except Exception:
+            metrics.synthesis_seconds = time.perf_counter() - synthesis_started
+            metrics.total_seconds = time.perf_counter() - request_started
+            _log_tts_request_timing(text, metrics, outcome="failed")
+            raise
 
         if not chunks:
             return b""
 
         audio = np.concatenate(chunks)
-        return _encode_audio(audio, output_sample_rate or sample_rate, response_format)
+        metrics.synthesis_seconds = time.perf_counter() - synthesis_started
+
+    final_sample_rate = output_sample_rate or sample_rate
+    metrics.audio_seconds = _audio_frame_count(audio) / final_sample_rate
+    encode_started = time.perf_counter()
+    try:
+        encoded = _encode_audio(audio, final_sample_rate, response_format)
+    except Exception:
+        metrics.encode_seconds = time.perf_counter() - encode_started
+        metrics.total_seconds = time.perf_counter() - request_started
+        _log_tts_request_timing(text, metrics, outcome="failed")
+        raise
+    metrics.encode_seconds = time.perf_counter() - encode_started
+    metrics.total_seconds = time.perf_counter() - request_started
+    _log_tts_request_timing(text, metrics, outcome="complete")
+    return encoded
+
+
+def _log_tts_request_timing(text: str, metrics: TTSGenerationMetrics, *, outcome: str) -> None:
+    print(
+        f"TTS request {outcome} "
+        f"(chars={len(text)}, words={_word_count(text)}, segments={metrics.segment_count}, "
+        f"model_seconds={metrics.model_seconds:.3f}, queue_seconds={metrics.queue_seconds:.3f}, "
+        f"synthesis_seconds={metrics.synthesis_seconds:.3f}, encode_seconds={metrics.encode_seconds:.3f}, "
+        f"audio_seconds={metrics.audio_seconds:.3f}, total_seconds={metrics.total_seconds:.3f})",
+        file=sys.stderr,
+    )
 
 
 @contextmanager
@@ -492,8 +562,7 @@ def _generate_audio_segment(
     instruct: str,
     language: str,
     max_tokens: int,
-    *,
-    allow_suspicious_short: bool = False,
+    seed: int,
 ) -> tuple[np.ndarray, int]:
     attempts = max(1, TTS_GENERATION_ATTEMPTS)
     best_audio = np.array([], dtype=np.float32)
@@ -508,6 +577,7 @@ def _generate_audio_segment(
             language=language,
             max_tokens=max_tokens,
             attempt=attempt,
+            seed=seed,
         )
         audio = _trim_trailing_inactive_audio(audio, sample_rate)
         activity = _audio_activity(audio, sample_rate)
@@ -545,49 +615,7 @@ def _generate_audio_segment(
                 file=sys.stderr,
             )
 
-    if allow_suspicious_short:
-        return best_audio, best_sample_rate
-
     raise _suspiciously_short_output_error(text, best_audio, best_sample_rate)
-
-
-def _generate_audio_parts_for_segment(
-    model: Any,
-    text: str,
-    instruct: str,
-    language: str,
-    max_tokens: int,
-) -> list[tuple[np.ndarray, int]]:
-    audio, sample_rate = _generate_audio_segment(
-        model=model,
-        text=text,
-        instruct=instruct,
-        language=language,
-        max_tokens=max_tokens,
-        allow_suspicious_short=True,
-    )
-    if not _is_suspiciously_short_audio(text, audio, sample_rate):
-        return [(audio, sample_rate)]
-
-    fallback_segments = _split_speech_text_at_sentence_boundaries(text, TTS_MAX_SEGMENT_CHARS)
-    if len(fallback_segments) <= 1:
-        raise _suspiciously_short_output_error(text, audio, sample_rate)
-
-    print(
-        "Falling back to sentence-level TTS after collapsed continuous segment "
-        f"(words={_word_count(text)}, segments={len(fallback_segments)})",
-        file=sys.stderr,
-    )
-    return [
-        _generate_audio_segment(
-            model=model,
-            text=fallback_segment,
-            instruct=instruct,
-            language=language,
-            max_tokens=max_tokens,
-        )
-        for fallback_segment in fallback_segments
-    ]
 
 
 def _generate_audio_segment_once(
@@ -597,6 +625,7 @@ def _generate_audio_segment_once(
     language: str,
     max_tokens: int,
     attempt: int,
+    seed: int,
 ) -> tuple[np.ndarray, int, int]:
     chunks: list[np.ndarray] = []
     sample_rate = 24000
@@ -604,6 +633,7 @@ def _generate_audio_segment_once(
     frame_count = 0
     max_seconds = _max_reasonable_audio_seconds(text)
     temperature, top_p, repetition_penalty = _tts_sampling_params(attempt)
+    _seed_tts_generation(seed)
 
     with _tts_watchdog(text):
         for result in model.generate_voice_design(
@@ -614,6 +644,8 @@ def _generate_audio_segment_once(
             top_p=top_p,
             repetition_penalty=repetition_penalty,
             max_tokens=max_tokens,
+            stream=True,
+            streaming_interval=TTS_STREAMING_INTERVAL_SECONDS,
         ):
             chunk = np.asarray(result.audio)
             chunks.append(chunk)
@@ -639,6 +671,18 @@ def _tts_sampling_params(attempt: int) -> tuple[float, float, float]:
     if attempt <= 0:
         return TTS_TEMPERATURE, TTS_TOP_P, TTS_REPETITION_PENALTY
     return TTS_RETRY_TEMPERATURE, TTS_RETRY_TOP_P, TTS_RETRY_REPETITION_PENALTY
+
+
+def _tts_seed_for_voice(instruct: str, language: str) -> int:
+    conditioning = f"{language}\0{instruct}".encode("utf-8")
+    voice_seed = int.from_bytes(hashlib.blake2s(conditioning, digest_size=4).digest(), "big")
+    return (TTS_SEED + voice_seed) % (2**31)
+
+
+def _seed_tts_generation(seed: int) -> None:
+    import mlx.core as mx
+
+    mx.random.seed(seed)
 
 
 def _split_speech_text(text: str, max_segment_chars: int) -> list[str]:
@@ -744,7 +788,7 @@ def _max_reasonable_audio_seconds(text: str) -> float:
         return float("inf")
     words = _word_count(text)
     expected_seconds = max(8.0, words / 1.8 + 8.0)
-    return min(TTS_MAX_OUTPUT_SECONDS, expected_seconds * 4.0)
+    return min(TTS_MAX_OUTPUT_SECONDS, expected_seconds * TTS_MAX_EXPECTED_DURATION_MULTIPLIER)
 
 
 def _is_suspiciously_long_audio(text: str, audio: np.ndarray, sample_rate: int) -> bool:
@@ -1497,6 +1541,7 @@ def audio_speech(request: RequestPayload) -> Response:
         )
 
     started = time.perf_counter()
+    metrics = TTSGenerationMetrics()
     try:
         audio = generate_audio(
             text=text,
@@ -1504,6 +1549,7 @@ def audio_speech(request: RequestPayload) -> Response:
             language=request.language,
             response_format=response_format,
             max_tokens=request.max_tokens or TTS_MAX_TOKENS,
+            metrics=metrics,
         )
     except AudioFormatError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -1521,7 +1567,12 @@ def audio_speech(request: RequestPayload) -> Response:
     return Response(
         content=audio,
         media_type=TTS_RESPONSE_FORMATS[response_format]["media_type"],
-        headers={"X-Generation-Time": f"{elapsed:.3f}"},
+        headers={
+            "X-Generation-Time": f"{elapsed:.3f}",
+            "X-Agent-Voice-Audio-Seconds": f"{metrics.audio_seconds:.3f}",
+            "X-Agent-Voice-Segments": str(metrics.segment_count),
+            "Server-Timing": metrics.server_timing(),
+        },
     )
 
 
