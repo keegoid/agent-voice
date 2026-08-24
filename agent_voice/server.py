@@ -155,7 +155,7 @@ def _suppress_known_loader_noise():
 class RequestPayload(BaseModel):
     model: str = "qwen3-tts"
     input: str = Field(min_length=1)
-    voice: str = "cool_street_deadpan"
+    voice: str = "chesapeake_balanced"
     response_format: str = "wav"
     language: str = "English"
     instruct: str | None = Field(default=None, max_length=4000)
@@ -942,8 +942,8 @@ def _env_flag(name: str, default: bool) -> bool:
 
 
 def _notify_default_voice() -> str:
-    configured = os.getenv("AGENT_VOICE_NOTIFY_DEFAULT_VOICE") or "cool_street_deadpan"
-    return configured if configured in VOICE_DESIGNS else "cool_street_deadpan"
+    configured = os.getenv("AGENT_VOICE_NOTIFY_DEFAULT_VOICE") or "chesapeake_balanced"
+    return configured if configured in VOICE_DESIGNS else "chesapeake_balanced"
 
 
 def _notify_state_dir() -> Path:

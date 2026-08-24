@@ -143,7 +143,7 @@ def test_configure_hermes_handles_inline_maps_comments_and_wide_indents(tmp_path
     assert "voice block" in updated_config
     assert loaded["tts"]["provider"] == "openai"
     assert loaded["tts"]["openai"]["model"] == "qwen3-tts"
-    assert loaded["tts"]["openai"]["voice"] == "cool_street_deadpan"
+    assert loaded["tts"]["openai"]["voice"] == "chesapeake_balanced"
     assert loaded["tts"]["openai"]["base_url"] == "http://127.0.0.1:8880/v1"
     assert loaded["voice"]["auto_tts"] is True
 

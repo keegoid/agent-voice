@@ -19,6 +19,7 @@ from typing import Any, Callable, Iterable
 PUBLIC_VOICES = {
     "anime_genki",
     "anime_villain",
+    "chesapeake_balanced",
     "cool_figment_rain",
     "cool_street_deadpan",
     "cyberpunk_cool",

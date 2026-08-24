@@ -325,7 +325,7 @@ enqueue_speech_spool() {
   voice="$(speech_option_value "--voice" "$@" || speech_option_value "-v" "$@" || true)"
   instruct="$(speech_option_value "--instruct" "$@" || speech_option_value "-i" "$@" || true)"
   language="${AGENT_VOICE_LANGUAGE:-English}"
-  [[ -n "$voice" ]] || voice="${AGENT_VOICE_VOICE:-cool_street_deadpan}"
+  [[ -n "$voice" ]] || voice="${AGENT_VOICE_VOICE:-chesapeake_balanced}"
 
   tmp="$(mktemp "$spool_dir/.agent-speak.XXXXXX")" || return 1
   final="$spool_dir/$(date '+%Y%m%d%H%M%S')-$$-$RANDOM.json"
