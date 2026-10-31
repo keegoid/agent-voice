@@ -23,6 +23,7 @@ PUBLIC_VOICES = {
     "chesapeake_balanced_female",
     "cool_figment_rain",
     "cool_street_deadpan",
+    "fig_warm_deadpan",
     "cyberpunk_cool",
     "cyberpunk_cool_male",
     "peng_mythic",
