@@ -113,6 +113,14 @@ _COOL_STREET_DEADPAN = (
     + _CONSISTENT_SPEAKER
 )
 
+_FIG_WARM_DEADPAN = (
+    "A young woman voice actor with a mid-range tone and dry deadpan confidence. "
+    "Street-smart, neon-lit back-alley cool under pressure. "
+    "Not bubbly and no high-pitched or fast-paced genki. "
+    "A touch warmer and more human, with a faint dry half-smile under the words."
+    + _CONSISTENT_SPEAKER
+)
+
 _PENG_MYTHIC = (
     "An adult woman voice actor performing an epic narrator in a fantasy saga. "
     "Clear, commanding, and resonant, building steadily like a gathering "
@@ -187,6 +195,7 @@ VOICE_DESIGNS: dict[str, str] = {
     "cyberpunk_cool_male": _CYBERPUNK_COOL_MALE,
     "cool_figment_rain": _COOL_FIGMENT_RAIN,
     "cool_street_deadpan": _COOL_STREET_DEADPAN,
+    "fig_warm_deadpan": _FIG_WARM_DEADPAN,
     "male_boardroom_baritone": _MALE_BOARDROOM_BARITONE,
     "male_market_floor_tenor": _MALE_MARKET_FLOOR_TENOR,
     "male_editorial_bass": _MALE_EDITORIAL_BASS,
